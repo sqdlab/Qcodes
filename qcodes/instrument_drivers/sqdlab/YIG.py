@@ -6,8 +6,8 @@ class YIG(VisaInstrument):
 
     The old driver asked for *STB? before every set, add that back if required.
     '''
-    def __init__(self, name, address):
-        super().__init__(name, address, terminator='\n')
+    def __init__(self, name, address, **kwargs):
+        super().__init__(name, address, terminator='\n', **kwargs)
         # add parameters
         self.add_parameter(
             'frequency', label='Center Frequency', unit='Hz',

@@ -1,7 +1,7 @@
 from qcodes import Instrument
 
 class TriggerAWG(Instrument):
-    def __init__(self, name, parameter, disable_val, enable_val):
+    def __init__(self, name, parameter, disable_val, enable_val, **kwargs):
         '''
         A trigger source with AWG interface. Can be added to the list of AWGs 
         to inhibit triggers while the AWGs are programmed.
@@ -15,7 +15,7 @@ class TriggerAWG(Instrument):
         start_value
             value of parameter that enables the trigger_source
         '''
-        super().__init__(name)
+        super().__init__(name, **kwargs)
         self._parameter = parameter
         self._disable_val = disable_val
         self._enable_val = enable_val
