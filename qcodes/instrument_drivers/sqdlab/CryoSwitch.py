@@ -9,12 +9,11 @@ class DriverChannel(object):
     '''
     Half-bridge driver channel. 
 
-    Attributes
-    ----------
-    pin_en: `int`
-        Enable pin number on the RPi.
-    pin_in: `int`
-        Input pin number on the RPi.
+    Attributes:
+        pin_en: `int`
+            Enable pin number on the RPi.
+        pin_in: `int`
+            Input pin number on the RPi.
     '''
     def __init__(self, pin_in, pin_en):
         self.pin_en = pin_en
@@ -37,17 +36,16 @@ class CryoSwitchPort(Parameter):
 class CryoSwitchChannel(InstrumentChannel):
     def __init__(self, parent, name, cs, rs, fault, portmap):
         '''
-        Input
-        -----
-        cs: `int`
-            H-bridge chip select pin
-        rs: `int`
-            H-bridge reset pin
-        fault: `tuple` of `int`
-            H-bridge fault pin(s)
-        portmap: `dict` with `str`:(`BridgeChannel`, `BridgeChannel` items
-            H-bridge input and enable pins for the anode and cathode of each
-            switch channel.
+        Arguments:
+            cs: `int`
+                H-bridge chip select pin
+            rs: `int`
+                H-bridge reset pin
+            fault: `tuple` of `int`
+                H-bridge fault pin(s)
+            portmap: `dict` with `str`:(`BridgeChannel`, `BridgeChannel`) items
+                H-bridge input and enable pins for the anode and cathode of 
+                each switch channel.
         '''
         super().__init__(parent, name)
         self.pin_rs = rs
@@ -103,9 +101,7 @@ class CryoSwitchChannel(InstrumentChannel):
             self.outpin(self.pin_cs, False)
 
     def switch(self, port, state):
-        '''
-        Connect or disconnect `port`.
-        '''
+        '''Connect or disconnect `port`.'''
         if port not in self.portmap:
             raise KeyError('Invalid port {}.'.format(port))
         anode, cathode = self.portmap[port]

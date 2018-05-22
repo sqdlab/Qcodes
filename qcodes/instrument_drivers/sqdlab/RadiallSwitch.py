@@ -5,6 +5,21 @@ from qcodes import (
 
 class SwitchPort(Parameter):
     def __init__(self, name, port, reset_pin, set_pin, **kwargs):
+        '''
+        A single port on a single microwave switch.
+
+        Arguments:
+            name: `str`
+                Name of the parameter exposed by SwitchChannel.
+            port: `str`
+                Name of the port on the switch
+            reset_pin: `int`
+                RPi pin pulsed to open the switch port.
+            set_pin: `int`
+                RPi pin pulsed to close the switch port.
+            **kwargs:
+                Passed to base class.
+        '''
         super().__init__(name, **kwargs)
         self.port = port
         self.reset_pin = reset_pin
@@ -15,17 +30,22 @@ class SwitchPort(Parameter):
             self._instrument.direction(pin, 'OUT')
 
     def notify(self, pin):
+        '''
+        Notify the port that a pin was pulsed on the channel.
+        The pin is the set or reset pin, update the internal state of the port.
+        '''
         if pin == self.set_pin:
             self.state = True
         if pin == self.reset_pin:
             self.state = False
 
     def get_raw(self):
+        '''Return current state of the port. None indicates an unknown state.'''
         return getattr(self, 'state', None)
 
     def set_raw(self, state):
+        '''Set or reset the port.'''
         self._instrument.pulse(self.set_pin if state else self.reset_pin, True)
-        #self.state = state
 
 
 class SwitchChannel(InstrumentChannel):
@@ -34,16 +54,22 @@ class SwitchChannel(InstrumentChannel):
 
     def __init__(self, parent, name, portmap):
         '''
-        Input
-        -----
-        portmap: `dict` with `str`:(`BridgeChannel`, `BridgeChannel` items
-            H-bridge input and enable pins for the anode and cathode of each
-            switch channel.
+        A microwave switch.
+
+        Arguments:
+            portmap: `dict` with `str`:`SwitchPort` items
+                Port names and state objects of the switch.
         '''
         super().__init__(parent, name)
         self.add_parameter('settle_time', ManualParameter, initial_value=10e-3, 
                            vals=vals.Numbers(0.5e-6, 1.), unit='s')
         self.add_parameter('route', 
+            docstring='''
+            Set a point-to-point connection on the switch.
+
+            Route can be set to ROUTE_NONE or any port name to reset all ports
+            but one and may return ROUTE_NONE, ROUTE_MULTIPLE or any port name.
+            '''
             get_cmd=self._get_route, set_cmd=self._set_route,  
             vals=vals.Enum(None, self.ROUTE_NONE, *portmap.keys())
         )
@@ -53,7 +79,7 @@ class SwitchChannel(InstrumentChannel):
                                vals=vals.Enum(True, False, None))
 
     def _get_route(self):
-        '''calculate route from set ports'''
+        '''Calculate route from set ports.'''
         route = self.ROUTE_NONE
         for port in self.parameters.values():
             if isinstance(port, SwitchPort):
@@ -69,7 +95,7 @@ class SwitchChannel(InstrumentChannel):
         return route
 
     def _set_route(self, route):
-        '''Disconnect all ports and connect route specified by route.'''
+        '''Disconnect all ports and connect port specified by route.'''
         # reset all ports except route
         for port in self.parameters.values():
             if isinstance(port, SwitchPort):
@@ -105,6 +131,7 @@ class RadiallSwitch(VisaInstrument):
         'sw0': dict(P1=(13,11), P2=(13,12), P3=(13,15), P4=(13,16)), # one cable tie
         'sw1': dict(P1=(26,21), P2=(26,22), P3=(26,23), P4=(26, 24)) # two cable ties
     }
+
     def __init__(self, name, address, portmaps={'sw0':'sw0', 'sw1':'sw1'}, 
                  settle_time=10e-3, reset=False, **kwargs):
         '''
@@ -113,17 +140,16 @@ class RadiallSwitch(VisaInstrument):
         The GPIO outputs of an RPi are directly connected to the TTL inputs of
         one or more latching Radiall switches.
 
-        Input
-        -----
-        name: `str`
-            Name of the instrument
-        address: `str`
-            Visa resource id of the instrument
-        portmaps: `dict` of `str`:`dict` pairs
-            Channel name to portmap dict.
-            Each portmap is eigher:
-            * a port name to (reset pin, set pin) dict.
-            * a string identifying a preset portmap (currently sw0, sw1)
+        Arguments:
+            name: `str`
+                Name of the instrument
+            address: `str`
+                Visa resource id of the instrument
+            portmaps: `dict` of `str`:`dict` pairs
+                Channel name to portmap dict.
+                Each portmap is either:
+                * a port name to (reset pin, set pin) dict.
+                * a string identifying a preset portmap (currently sw0, sw1)
         '''
         super().__init__(name, address, terminator='\n', **kwargs)
 
@@ -137,6 +163,6 @@ class RadiallSwitch(VisaInstrument):
             # optional reset
             submodule.settle_time.set(settle_time)
             if reset:
-                submodule.route.set('Disconnected')
+                submodule.route.set(SwitchChannel.ROUTE_NONE)
 
         self.connect_message()
