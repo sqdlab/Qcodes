@@ -1,0 +1,328 @@
+import pytest
+from pytest import fixture, raises, mark, skip, xfail
+
+import numpy as np
+
+import dsp.fft
+
+import reikna
+from reikna.core import Type, Annotation, Parameter
+from reikna.algorithms import PureParallel
+
+@fixture(scope='module')
+def api():
+    return reikna.cluda.ocl_api()
+
+@fixture(scope='module')
+def thread(api):
+    return api.Thread.create()
+
+@fixture
+def shape():
+    return (4,16)
+
+def random(dtype, shape):
+    if issubclass(dtype, np.complexfloating):
+        return (np.random.rand(*shape) + 1j*np.random.rand(*shape)).astype(dtype)
+    else:
+        return np.random.rand(*shape).astype(dtype)
+
+@fixture
+def input(dtype, shape):
+    return random(dtype, shape)
+
+def identity(type):
+    return PureParallel(
+        [Parameter('output', Annotation(type, 'o')),
+         Parameter('input', Annotation(type, 'i'))],
+        """
+        ${output.store_same}(${input.load_same});
+        """
+    )
+
+
+class TestBroadcast(object):
+    @fixture(params=[np.float32, np.complex64])
+    def dtype(self, request):
+        return request.param
+
+    def broadcast(self, dtype, shape, out_shape):
+        return dsp.fft.Broadcast(out_shape, Type(dtype, shape))
+
+    def reference(self, input, out_shape):
+        while input.ndim > len(out_shape):
+            input = input[0]
+        return np.broadcast_to(input, out_shape)
+
+    @mark.parametrize('shape,out_shape', [((1,), (16,)), 
+                                          ((1,16), (4,16)), 
+                                          ((16,), (4,16)),
+                                          ((1,16), (16,)),
+                                          ((1,1,16), (16,)),
+                                          #((4,1,16), (5,16)),
+                                          ((4,1,16), (4,5,16))])
+    def test_broadcast(self, thread, dtype, shape, out_shape, input):
+        broadcast = self.broadcast(dtype, shape, out_shape)
+        comp = identity(broadcast.output)
+        comp.parameter.input.connect(broadcast, broadcast.output, input_p=broadcast.input)
+        ccomp = comp.compile(thread)
+
+        reference = self.reference(input, out_shape)
+        input = thread.to_device(input)
+        output = thread.empty_like(comp.parameter.output)
+        ccomp(output, input)
+        thread.synchronize()
+        assert(np.allclose(reference, output.get()))
+
+
+class TestPadding(object):
+    @fixture
+    def dtype(self):
+        return np.complex64
+
+    @fixture(params=[(30,), (2,29), (2,3,20), (2,3,4,20)])
+    def shape(self, request):
+        return request.param
+
+    @fixture
+    def fft_shape(self, shape):
+        return shape[:-1] + (1<<int(np.ceil(np.log2(shape[-1]))),)
+
+    @fixture
+    def padding(self, dtype, shape, fft_shape):
+        return dsp.fft.Padded(Type(dtype, fft_shape), Type(dtype, shape), 0.)
+
+    def test_padding(self, thread, padding, input, fft_shape):
+        comp = identity(padding.output)
+        comp.parameter.input.connect(padding, padding.output, input_p=padding.input)
+        ccomp = comp.compile(thread)
+
+        reference = np.pad(input, [(0, s0-s1) for s0, s1 in zip(fft_shape, input.shape)], 'constant')
+        input = thread.to_device(input)
+        output = thread.empty_like(comp.parameter.output)
+        ccomp(output, input)
+        thread.synchronize()
+        assert np.all(output.get() == reference)
+
+
+class TestCast(object):
+    def cast(self, dtype, ttype, shape):
+        return dsp.fft.Cast(Type(ttype, shape), Type(dtype, shape))
+
+    def _test_cast(self, thread, input, dtype, ttype):
+        cast = self.cast(dtype, ttype, input.shape)
+        comp = identity(cast.output)
+        comp.parameter.input.connect(cast, cast.output, input_p=cast.input)
+        ccomp = comp.compile(thread)
+
+        reference = input.astype(ttype)
+        input = thread.to_device(input)
+        output = thread.empty_like(comp.parameter.output)
+        ccomp(output, input)
+        thread.synchronize()
+        assert np.all(output.get() == reference)
+
+    @mark.parametrize('dtype,ttype', [(np.int8, np.int8), (np.int8, np.int16), (np.int8, np.int32), 
+                                      (np.uint32, np.int32), (np.int32, np.uint32), 
+                                      (np.int8,np.float32), (np.int16,np.float32), (np.int32,np.float32),
+                                      (np.float32,np.float64), (np.float64,np.float32), 
+                                      (np.complex64,np.complex128), (np.complex128,np.complex64)])
+    def test_cast_working(self, thread, input, dtype, ttype):
+        self._test_cast(thread, input, dtype, ttype)
+
+    @mark.parametrize('dtype,ttype', [(np.float32,np.complex64), (np.complex64,np.float32)])
+    def test_cast_failing(self, thread, input, dtype, ttype):
+        with raises(ValueError):
+            self._test_cast(thread, input, dtype, ttype)
+
+
+class TestComplex(object):
+    def complex(self, dtype, shape):
+        return dsp.fft.Complex(Type(dtype, shape))
+
+    @mark.parametrize('dtype,ttype', [(np.float32, np.complex64), (np.float64, np.complex128)])
+    def test_complex(self, thread, dtype, ttype, shape, input):
+        complex = self.complex(dtype, shape)
+        comp = identity(complex.output)
+        comp.parameter.input.connect(complex, complex.output, input_p=complex.input)
+        ccomp = comp.compile(thread)
+
+        reference = input.astype(ttype)
+        input = thread.to_device(input)
+        output = thread.empty_like(comp.parameter.output)
+        ccomp(output, input)
+        thread.synchronize()
+        assert np.all(output.get() == reference)
+
+
+class TestMultiply(object):
+    @fixture(params=[np.float32, np.complex64])
+    def dtype(self, request):
+        return request.param
+
+    @fixture
+    def in1(self, dtype, shape):
+        return random(dtype, shape)
+
+    @fixture
+    def in2(self, dtype, shape):
+        return random(dtype, shape)
+
+    def test_multiply(self, thread, shape, dtype, in1, in2):
+        comp = dsp.fft.Multiply(Type(dtype, shape))
+        ccomp = comp.compile(thread)
+        output = thread.empty_like(comp.parameter.output)
+        ccomp(output, thread.to_device(in1), thread.to_device(in2))
+        thread.synchronize()
+        reference  = (in1 * in2).astype(dtype)
+        assert np.allclose(reference, output.get(), atol=1e-7)
+
+
+class TestFFT(object):
+    @fixture(params=[np.float32, np.complex64])
+    def dtype(self, request):
+        return request.param
+
+    @fixture(params=[-1])
+    def axis(self, request):
+        return request.param
+
+    @fixture(params=[False,True])
+    def padding(self, request):
+        return request.param
+
+    @fixture(params=[(12,), (16,), 
+                     (4,12), (3,12), (3,16), (4,16), 
+                     (3,6,12), (4,6,12), (4,8,12), (4,8,16)])
+    def shape(self, request):
+        return request.param
+
+    def fft(self, thread, input, axis, padding):
+        comp = dsp.fft.FFT(Type(input.dtype, input.shape), axes=(axis,), 
+                           padding=padding)
+        return comp.compile(thread)
+
+    def run_fft(self, thread, input, axis, padding):
+        fft = self.fft(thread, input, axis, padding)
+        input = thread.to_device(input)
+        output = thread.empty_like(fft.parameter.output)
+        fft(output, input, False)
+        thread.synchronize()
+        return output.get()
+
+    @mark.parametrize('axis', [-3,-2,-1,0,1,2],
+                      ids=['-3', '-2', '-1', '+0', '+1', '+2'])
+    def test_fft(self, thread, input, axis, padding):
+        if axis in range(-input.ndim, input.ndim):
+            result = self.run_fft(thread, input, axis, padding)
+            # calculate fft with numpy
+            padding = [(0, s0-s1) for s0, s1 in zip(result.shape, input.shape)]
+            input = np.pad(input, padding, 'constant')
+            reference = np.fft.fft(input, axis=axis)
+            assert np.allclose(result, reference, atol=1e-6)
+        else:
+            with raises(IndexError):
+                self.run_fft(thread, input, axis, padding)
+
+
+class TestFFTConvolve(object):
+    pad_tuple = lambda self, shape, ndim: (1,)*(ndim-len(shape)) + shape
+    pad_shape = lambda self, arr, ndim: arr.reshape(self.pad_tuple(arr.shape, ndim))
+
+    @fixture
+    def in1(self, shape1):
+        return random(np.complex64, shape1)
+
+    @fixture
+    def in2(self, shape2):
+        return random(np.complex64, shape2)
+
+    #@fixture(params=[(4,), (1,4), (2,4), (1,1,4), (1,2,4), (4,1,4), (4,2,4)])
+    #def shape1(self, request):
+    #    return request.param
+
+    #@fixture(params=[(2,), (4,), (8,), (2,4), (2,8)])
+    #def shape2(self, request):
+    #    return request.param
+
+    #@fixture(params=[-2, -1, 0, 1, 2])
+    #def axis(self, request, shape1, shape2):
+    #    # skip tests with invalid shape1/shape2/axis combination
+    #    axis = request.param
+    #    ndim = max(len(shape1), len(shape2))
+    #    shape1 = list(self.pad_tuple(shape1, ndim))
+    #    shape2 = list(self.pad_tuple(shape2, ndim))
+    #    try:
+    #        shape1.pop(axis)
+    #        shape2.pop(axis)
+    #    except:
+    #        skip()
+    #    for s1, s2 in zip(shape1, shape2):
+    #        if (s1 != s2) and (s1 != 1) and (s2 != 1):
+    #            skip()
+    #    return axis
+
+    def reference(self, in1, in2, dtype, axis):
+        # equalise number of dimensions, make 'axis' the last
+        ndim = max(in1.ndim, in2.ndim)
+        in1 = np.rollaxis(self.pad_shape(in1, ndim), axis, ndim)
+        in2 = np.rollaxis(self.pad_shape(in2, ndim), axis, ndim)
+        # determine result shape
+        shape = (tuple(max(s1, s2) for s1, s2 in zip(in1.shape, in2.shape))[:-1] + 
+                 (in1.shape[-1]+in2.shape[-1]-1,))
+        # broadcast arrays except for last dimension
+        in1 = np.broadcast_to(in1, shape[:-1] + (in1.shape[-1],))
+        in2 = np.broadcast_to(in2, shape[:-1] + (in2.shape[-1],))
+        # evaluate 1d convolutions
+        result = np.empty(shape, dtype)
+        for idx in np.ndindex(*shape[:-1]):
+            result[idx] = np.convolve(in1[idx], in2[idx], mode='full')
+        # put 'axis' back in place
+        return np.rollaxis(result, -1, axis)
+
+    def do_convolve(self, thread, in1, in2, axis, reps=1):
+        convolve_ = dsp.fft.FFTConvolve(in1, in2, axis)
+        convolve = convolve_.compile(thread)
+        out = thread.empty_like(convolve.parameter.output)
+        for _ in range(reps):
+            convolve(out, thread.to_device(in1), thread.to_device(in2))
+        thread.synchronize()
+        return out.get()
+
+    @mark.parametrize('shape1,shape2,axis', 
+                      [[(4,), (8,), -1], [(8,), (4,), -1], [(8,), (4,), 0], 
+                       [(4,8), (4,), -1], [(4,8), (4,), 1], 
+                       [(4,8), (1,4), -1], [(8,4), (1,4), 1], [(8,4), (4,4), -2], [(4,8), (4,4), 1], 
+                       [(2,4,8), (4,8), -2], [(2,4,8), (4,8), -1], [(2,4,8), (4,8), 1], [(2,4,8), (4,8), 2],
+                       [(1<<10, 4096), (1,129), -1], [(1<<10, 4096-128), (1,129), -1]
+                      ])
+    def test_convolve(self, thread, in1, in2, axis):
+        out = self.do_convolve(thread, in1, in2, axis)
+        reference = self.reference(in1, in2, out.dtype, axis)
+        try:
+            assert(np.allclose(out, reference, rtol=1e-4, atol=1e-4))
+        except:
+            #print(reference)
+            #print(out.get())
+            print(in1.shape, in2.shape, out.shape, axis)
+            print(reference-out)
+            raise
+         
+    @mark.parametrize('shape1,shape2,axis', 
+                      [mark.skip([(1<<10, 4096), (1,129), -1]), 
+                       mark.skip([(1<<10, 4096-128), (1,129), -1]), 
+                       [(1<<13,4096-128,1), (1,129,1), -2],
+                       [(1<<12,4096-128,2), (1,129,1), -2],
+                       [(1<<11,4096-128,4), (1,129,1), -2]],
+                      ids=['1k*4k_in', '1k*4k_out', '8k*4k_out', '4k*4k_out*2', '2k*4k_out*4'])
+    def test_speed(self, thread, in1, in2, axis):
+        '''
+        Results on RX460: (1<<26 samples)
+            * 4k output is faster than 4k \pm 128, for fft and tvmode
+            * fft 33.3ms, fft 0.2ms, mul 0.7ms, ifft 33.5ms with 4k input, 1k blocks
+            * fft 1.8ms, fft 0.1ms, mul 0.7ms, fft 1.3ms with 4k output, 1k blocks
+            * fft 28.5ms, fft 0.1ms, mul 11.8ms, ifft 17.7ms, total 58ms with 4k output, 16k blocks
+            * fft 56.8ms, fft 0.1ms, mul 11.8ms, ifft 36.5ms, total 105ms with 4k output, 8k blocks, 2ch
+            * fft 58ms, fft 0.1ms, mul 11.8ms, ifft 40ms, total 110ms with 4k output, 4k blocks, 4ch
+        '''
+        self.do_convolve(thread, in1, in2, axis, reps=1)

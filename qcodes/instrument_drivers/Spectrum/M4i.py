@@ -13,6 +13,7 @@
 #%%
 import os
 import sys
+import time
 import logging
 import numpy as np
 import ctypes as ct
@@ -360,6 +361,35 @@ class M4i(Instrument):
                                label='channel {}'.format(i),
                                unit='a.u.',
                                get_cmd=partial(self._read_channel, i))
+
+        # multipurpose channels
+        for i in range(3):
+            self.add_parameter(
+                'multipurpose_available_modes_{}'.format(i), 
+                label='Available modes on multipurpose channel X{}'.format(i),
+                get_cmd=partial(self._param32bit, 
+                                getattr(pyspcm, 'SPCM_X{}_AVAILMODES'.format(i))), 
+            )
+            mode_map = {'disabled': pyspcm.SPCM_XMODE_DISABLE, 
+                        'async_in': pyspcm.SPCM_XMODE_ASYNCIN, 
+                        'async_out': pyspcm.SPCM_XMODE_ASYNCOUT, 
+                        'digital_in': pyspcm.SPCM_XMODE_DIGIN, 
+                        'digital_in_2bit': pyspcm.SPCM_XMODE_DIGIN2BIT, 
+                        'trigger_out': pyspcm.SPCM_XMODE_TRIGOUT, 
+                        'run_state_out': pyspcm.SPCM_XMODE_RUNSTATE,
+                        'arm_state_out': pyspcm.SPCM_XMODE_ARMSTATE, 
+                        'reference_clock_out': pyspcm.SPCM_XMODE_REFCLKOUT, 
+                        'system_clock_out': pyspcm.SPCM_XMODE_SYSCLKOUT}
+            self.add_parameter(
+                'multipurpose_mode_{}'.format(i),
+                label='Operation mode of multipurpose channel X{}.'.format(i) + 
+                      'Changes take effect when an acquisition is started.', 
+                get_cmd=partial(self._param32bit, 
+                                getattr(pyspcm, 'SPCM_X{}_MODE'.format(i))), 
+                set_cmd=partial(self._set_param32bit,
+                                getattr(pyspcm, 'SPCM_X{}_MODE'.format(i))),
+                val_mapping=mode_map
+            )
 
         # acquisition modes
         # TODO: If required, the other acquisition modes can be added to the
@@ -746,6 +776,114 @@ class M4i(Instrument):
         voltages = self.convert_to_voltage(output, mV_range / 1000)
 
         return voltages
+
+    def multiple_trigger_fifo_acquisition(self, segments, samples, blocksize, posttrigger=None):
+        '''
+        Multiple recording acquisition with background DMA data transfer.
+        
+        Input
+        -----
+        segments: `int`
+            Total number of segments measured
+        samples: `int`, min 32 step 16
+            Number of samples per segment
+        blocksize: `int`
+            Number of segments per block dispatched for data processing
+        posttrigger: `int`, range 16 to samples-16 in steps of 16
+            Number of samples recorded after each trigger. Defaults to samples-16. 
+            
+        Yields
+        ------
+        data: `np.ndarray`, dtype=int16, shape=(blocksize, samples, channels)
+            Acquired data as a numpy array. If blocksize does not divide segments, the
+            last block will have shape (segments%blocksize, samples, channels).
+            
+        Notes
+        -----
+        * Returns a generator expression that can be used like an iterator in a for loop.
+        * The internal buffer is twice the size of data.
+        * Buffer overrun detection may fail if the digitizer status is queried by the user
+        during acquisition.
+        '''
+        # set card to multiple recording to fifo mode
+        self.card_mode(pyspcm.SPC_REC_FIFO_MULTI)
+
+        # * SPC_LOOPS is the total number of segments, can be 0=inf
+        # * SPC_MEMSIZE is ignored
+        # * SPC_SEGMENTSIZE is # of samples/segment
+        # * SPC_TRIGGERCOUNTER returns # of acquisitions (uint_48)
+        self.total_segments(segments)
+        self.segment_size(samples)
+        if posttrigger is None:
+            posttrigger = samples - 16
+        self.posttrigger_memory_size(posttrigger)
+        numch = bin(self.enable_channels()).count("1")
+        if not numch:
+            raise RuntimeError('No channels are enabled.')
+
+        # setup software buffer(s)
+        nbuffers = 2
+        buffer_samples = blocksize * samples * numch
+        buffer_bytes = 2*buffer_samples
+        data_buffers = (ct.c_int16*buffer_samples*nbuffers)()
+
+        self._def_transfer64bit(
+            pyspcm.SPCM_BUF_DATA, pyspcm.SPCM_DIR_CARDTOPC, buffer_bytes, ct.byref(data_buffers), 
+            0, buffer_bytes*nbuffers
+        )
+
+        try:
+            # start data acquisition & transfer
+            self.general_command(pyspcm.M2CMD_CARD_START | pyspcm.M2CMD_CARD_ENABLETRIGGER)
+            self.general_command(pyspcm.M2CMD_DATA_STARTDMA)
+
+            # data transfer
+            # SPC_M2STATUS: 
+            # * M2STAT_DATA_OVERRUN indicates a buffer overrun on the card
+            self.general_command(pyspcm.M2CMD_DATA_WAITDMA)
+            status = 0
+            abort = False
+            overrun = False
+            while True:
+                if overrun:
+                    # user_length must be queried before status for overrun detection
+                    user_length = self.user_available_length()
+                status = self.card_status()
+                #print('status=0x{:02x}, available={}k'.format(status, self.user_available_length()//1024))
+                #if (not overrun) and (status & (pyspcm.M2STAT_DATA_OVERRUN | pyspcm.M2STAT_CARD_READY)):
+                if status & (pyspcm.M2STAT_DATA_OVERRUN):
+                    # M2STAT_DATA_OVERRUN is only returned once and may be lost
+                    # if WAITDMA if used or the user queries the card status
+                    # M2STAT_CARD_READY indicates that the card has stopped
+                    # which may be the result of a overrun or end of the measurement
+                    logging.error('A buffer overrun occured on the digitizer. Aborting.')
+                    overrun = True
+                if status & pyspcm.M2STAT_DATA_BLOCKREADY:
+                    # user_length must be queried after status for this
+                    # clip shape[0] of the output array to block_size
+                    user_length = min(self.user_available_length(), buffer_bytes)
+                    user_position = self.user_available_position()
+                    data_buffer = ct.cast(ct.addressof(data_buffers) + user_position, 
+                                        ct.POINTER(user_length//2*ct.c_int16))
+                    data = np.frombuffer(data_buffer.contents, dtype=ct.c_int16)
+                    # abort acquisition if the user sends False
+                    abort = yield data.reshape(user_length//samples//numch//2, samples, numch)
+                    # free yielded portion of the buffer
+                    self._set_param32bit(pyspcm.SPC_DATA_AVAIL_CARD_LEN, user_length)
+                else:
+                    # in normal operation, user_length != 0 always coincides with a new block
+                    # if a buffer overrun occurs, no new block is reported and 
+                    # user_length != 0 marks the last (incomplete) block
+                    if overrun and (user_length != 0):
+                        break
+                    time.sleep(0)
+                if abort or (status & pyspcm.M2STAT_DATA_END): 
+                    break
+                #if self.general_command(pyspcm.M2CMD_DATA_WAITDMA):
+                #    raise RuntimeError('M4i WAITDMA returned an error.')
+        finally:
+            # stop transfer before invalidating buffer
+            self._stop_acquisition()
 
     def start_acquisition(self, mV_range, memsize, posttrigger_size=None, verbose=0):
         """ Start data acquisition of a single data trace

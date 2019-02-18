@@ -29,9 +29,8 @@ class Unpacker(InstrumentChannel):
     def __init__(self, parent:Instrument, name:str, **kwargs):
         super().__init__(parent, name, **kwargs)
         self.add_parameter(
-            'markers', Parameter, 
+            'markers', ManualParameter, 
             vals=vals.Ints(0, 2), default_value=0, 
-            get_cmd=self._get_markers, set_cmd=self._set_markers,
             docstring='Number of bits of digital data per sample.'
         )
         self.add_parameter(
@@ -40,8 +39,10 @@ class Unpacker(InstrumentChannel):
             docstring='Output floating point type for analog data.'
         )
         self.markers.set(0)
+        self.out_dtype.set(np.float32)
 
     @staticmethod
+    @functools.lru_cache()
     def sign_extension_factory(bits):
         '''Compile a sign extension function for int<bits>'''
         @numba.vectorize(['int16(int16)', 'int32(int32)'])
@@ -50,23 +51,13 @@ class Unpacker(InstrumentChannel):
             return (x & (sign_bit - 1)) - (x & sign_bit)
         return sign_extension
 
-    #@staticmethod
-    #def shift_or_factory(bits):
-    #    '''Compile a helper function to pack markers'''
-    #    @numba.vectorize(['int16(int16, int16)'], identity=0)
-    #    def shift_or(a, b):
-    #        shift = 16-bits
-    #        return np.uint8((a<<shift) | ((b>>bits) & ((1<<shift)-1)))
-    #    return shift_or
-
-    #def pack_markers(self, raw_samples):
-    #    if self._markers == 0:
-    #        return None
-    #    if raw_samples.ndim == 1:
-    #        return self.shift_or(0, raw_samples)
-    #    else:
-    #        return (self.shift_or.reduce(raw_samples[...,::-1], axis=-1)
-    #                             .astype(np.uint16))
+    def to_float(self, raw_samples, out=None):
+        dtype = self.out_dtype.get()
+        markers = self.markers.get()
+        if markers != 0:
+            sign_extension = self.sign_extension_factory(16-markers)
+            raw_samples = sign_extension(raw_samples, out=out)
+        return raw_samples.astype(dtype)
 
     @staticmethod
     @functools.lru_cache()
@@ -98,7 +89,7 @@ class Unpacker(InstrumentChannel):
         locals_ = dict(np=np, numba=numba)
         template = '''
             @numba.njit()
-            def pack_markers(digital):
+            def pack_markers(digital, out=None):
                 """Pack digital bits for each sample into a single number."""
                 if digital.ndim != 2:
                     raise ValueError('Input must be 2d.')
@@ -106,7 +97,14 @@ class Unpacker(InstrumentChannel):
                 if channels != {channels}:
                     raise ValueError('Expected {channels} channels.')
                 mask = np.uint{in_bits}(-1) ^ ((1<<({in_bits}-{markers})) - 1)
-                out = np.empty((samples,), np.uint{out_bits})
+                if out is None:
+                    out = np.empty((samples,), np.uint{out_bits})
+                else:
+                    #out = out.ravel()
+                    if out.size != samples:
+                        raise ValueError('out has the wrong size.')
+                    if out.itemsize != {out_bits}//8:
+                        raise ValueError('out dtype must be uint{out_bits}.')
                 for idx in range(samples):
                     out_elem = np.uint{out_bits}(0)
                     for channel in range({channels}):
@@ -116,50 +114,41 @@ class Unpacker(InstrumentChannel):
                 return out
             '''
         code = template.format(channels=channels, markers=markers, 
-                            in_bits=in_bits, out_bits=out_bits)
+                               in_bits=in_bits, out_bits=out_bits)
         bytecode = compile(textwrap.dedent(code), '<string>', 'exec')
         exec(bytecode, locals_, locals_)
         return locals_['pack_markers']
 
-    def pack_markers(self, raw_samples):
-        if self._markers == 0:
+    def pack_markers(self, raw_samples, out=None):
+        markers = self.markers.get()
+        if markers == 0:
             return None
         if raw_samples.ndim == 1:
-            pack_markers = self.pack_markers_factory(1, self._markers, 16)
+            pack_markers = self.pack_markers_factory(1, markers, 16)
             return pack_markers(raw_samples[:,None])
         else:
             channels = raw_samples.shape[-1]
-            pack_markers = self.pack_markers_factory(channels, self._markers, 16)
-            packed_markers = pack_markers(np.reshape(raw_samples, (-1,channels)))
+            pack_markers = self.pack_markers_factory(channels, markers, 16)
+            if out is not None:
+                out = out.ravel()
+            packed_markers = pack_markers(raw_samples.reshape((-1,channels)), 
+                                          out=out)
             return np.reshape(packed_markers, raw_samples.shape[:-1])
 
-    def _set_markers(self, markers):
-        self._markers = markers
-        if markers == 0:
-            self.sign_extension = lambda x: x
-        else:
-            self.sign_extension = self.sign_extension_factory(16-markers)
-            #self.shift_or = self.shift_or_factory(16-markers)
-
-    def _get_markers(self):
-        return self._markers
-
-    def __call__(self, raw_samples):
+    def __call__(self, raw_samples, out=(None,None)):
         '''Separate analog and marker data, convert analog to float.
         
         Arguments:
             raw_samples: `np.ndarray`, dtype=int16
                 Fixed-point samples with some bits replaced by digital data
+            out: (ndarray, ndarray), optional
+                `analog` and `digital` output buffers
         Returns:
             analog: `np.ndarray`, dtype=out_dtype
             digital: `np.ndarray`
         '''
-        dtype = self.out_dtype.get()
-        if self._markers == 0:
-            return (raw_samples.astype(dtype), None)
-        else:
-            return (self.sign_extension(raw_samples).astype(dtype),
-                    self.pack_markers(raw_samples))
+        return (self.to_float(raw_samples, out=out[0]), 
+                self.pack_markers(raw_samples, out=out[1]))
 
 
 
@@ -192,7 +181,9 @@ class DigitalDownconversion(InstrumentChannel):
                              np.arange(float_samples.shape[-2]))
         if float_samples.dtype in [np.float16, np.float32]:
             lo_waveform = lo_waveform.astype(np.complex64)
-        return float_samples*lo_waveform[:,None]
+        # broadcasting by element duplication is faster than numpy broadcasting
+        lo_waveform = np.tile(lo_waveform[:,None], (1, float_samples.shape[-1]))
+        return float_samples*lo_waveform
 
 
 
@@ -248,7 +239,7 @@ class Filter(InstrumentChannel):
 
     def __call__(self, samples):
         if self.mode.get() != 'full':
-            raise NotImplementedError('Only filter method "full" is supported.')
+            raise NotImplementedError('Only convolution mode "full" is supported.')
         dtype = samples.dtype.type().real.dtype
         coefficients = self.coefficients().astype(dtype)
         return scipy.signal.upfirdn(
@@ -381,6 +372,20 @@ class Synchronizer(InstrumentChannel):
 
     
 
+class Mean(InstrumentChannel):
+    @staticmethod
+    def __call__(data, ndim):
+        '''Calculate the mean over the leading data.ndim-ndim axes of data.'''
+        shape = data.shape
+        try:
+            data.shape = (np.prod(shape[:-ndim]),) + shape[-ndim:]
+            mean = np.mean(data, axis=0)
+        finally:
+            data.shape = shape
+        return mean
+
+
+
 class TvMode(Instrument):
     '''Instrument that performs block-averaging data aquisition.
 
@@ -395,26 +400,12 @@ class TvMode(Instrument):
         self.add_parameter('segments', ManualParameter, 
                            label='Number of segments. Zero for automatic.', 
                            vals=vals.Numbers(min_value=0))
-        self.add_parameter('samples', ManualParameter, 
-                           label='Number of samples/segment',
-                           vale=vals.Numbers(min_value=1))
 
         self.add_submodule('unpacker', Unpacker(self, 'unpacker'))
         self.add_submodule('ddc', DigitalDownconversion(self, 'ddc'))
         self.add_submodule('filter', Filter(self, 'filter'))
         self.add_submodule('sync', Synchronizer(self, 'sync'))
-
-    @staticmethod
-    def mean(data, ndim):
-        '''Calculate the mean over the leading data.ndim-ndim axes of data.'''
-        shape = data.shape
-        try:
-            data.shape = (np.prod(shape[:-ndim]),) + shape[-ndim:]
-            mean = np.mean(data, axis=0)
-        finally:
-            data.shape = shape
-        return mean
-
+        self.add_submodule('mean', Mean(self, 'mean'))
 
     def __call__(self, source):
         '''Process blocks of samples provided by source.
