@@ -3,6 +3,23 @@ from . import dsp
 import numpy as np
 import pyopencl as cl
 
+def get_cl_context():
+    '''get an opencl context for a gpu device'''
+    for platform in cl.get_platforms():
+        try:
+            return cl.Context(
+                dev_type=cl.device_type.GPU, 
+                properties=[(cl.context_properties.PLATFORM, platform)]
+            )
+        except cl.cffi_cl.RuntimeError:
+            pass
+    raise RuntimeError('Unable to create an opencl context for a GPU device.')
+
+def get_cl_queue(cl_context):
+    '''create a new opencl command queue'''
+    return cl.CommandQueue(cl_context)
+
+
 class UnpackerGPU(Unpacker):
     '''Offload floating-point math to GPU, perform marker extraction on CPU'''
     def __init__(self, *args, **kwargs):
@@ -21,7 +38,8 @@ class DigitalDownconversionGPU(DigitalDownconversion):
         
     def __call__(self, float_samples, out=None):
         return self.ddc(self.parent.gpu_queue, float_samples, out=out, 
-                        if_freq=self.intermediate_frequency.get())
+                        if_freq=self.intermediate_frequency.get(), 
+                        scale=self.scale.get())
 
 class FilterGPU(Filter):
     def __init__(self, *args, **kwargs):
@@ -43,24 +61,43 @@ class MeanGPU(Mean):
 
     def __call__(self, data, ndim, out=None):
         return self.mean(self.parent.gpu_queue, data, ndim=ndim, out=out).get()
-    
+
+class SumGPU(Mean):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.sum = dsp.Sum(self.parent.gpu_context, np.complex64, np.complex64)
+
+    def __call__(self, data, ndim, out=None):
+        return self.sum(self.parent.gpu_queue, data, ndim=ndim, out=out).get()
+
 class TvModeGPU(TvMode):
-    def __init__(self, name, cl_context, cl_queue, *args, **kwargs):
+    def __init__(self, name, cl_context=None, cl_queue=None, *args, **kwargs):
         Instrument.__init__(self, name, *args, **kwargs)
+        # create GPU resources
+        if cl_context is None:
+            if cl_queue is not None:
+                cl_context = cl_queue.context
+            else:
+                cl_context = get_cl_context()
+        if cl_queue is None:
+            cl_queue = get_cl_queue(cl_context)
         self.gpu_context = cl_context
         self.gpu_queue = cl_queue
         
         self.add_parameter('segments', ManualParameter, 
                            label='Number of segments. Zero for automatic.', 
-                           vals=vals.Numbers(min_value=0))
+                           vals=vals.Numbers(min_value=0), default_value=0)
+        self.segments.set(0)
         
         self.add_submodule('unpacker', UnpackerGPU(self, 'unpacker'))
         self.add_submodule('ddc', DigitalDownconversionGPU(self, 'ddc'))
         self.add_submodule('filter', FilterGPU(self, 'filter'))
         self.add_submodule('sync', Synchronizer(self, 'sync'))
-        self.add_submodule('mean', MeanGPU(self, 'mean'))
+        #self.add_submodule('mean', MeanGPU(self, 'mean'))
+        self.add_submodule('sum', SumGPU(self, 'sum'))
+        self.connect_message()
 
-    def __call__(self, source):
+    def generate(self, source, mean=False):
         # using single buffering, with buffer allocation by the submodules
         analog = None
         digital = None
@@ -83,6 +120,9 @@ class TvModeGPU(TvMode):
                 first_segment = 0
             else:
                 digital = self.unpacker.pack_markers(block, out=digital)
+                if digital is None:
+                    raise ValueError('Enable marker extraction in unpacker '
+                                     'to use auto segments.')
                 marked_segments = self.sync(digital)
                 if len(marked_segments) == 0:
                     raise ValueError('No synchronization markers received.')
@@ -100,8 +140,25 @@ class TvModeGPU(TvMode):
             repetitions = analog.shape[0] // segments
             analog_trunc = (analog_math[:repetitions*segments,...]
                             .reshape((repetitions, segments)+analog_math.shape[1:]))
-            analog_mean = self.mean(analog_trunc, analog_trunc.ndim-1)
+            #analog_mean = self.mean(analog_trunc, analog_trunc.ndim-1)
+            #if first_segment:
+            #    analog_mean = np.roll(analog_mean, -first_segment, axis=0)
+            #yield analog_mean
+            analog_sum = self.sum(analog_trunc, analog_trunc.ndim-1)
             if first_segment:
-                analog_mean = np.roll(analog_mean, -first_segment, axis=0)
-            yield analog_mean
+                analog_sum = np.roll(analog_sum, -first_segment, axis=0)
+            if mean:
+                yield analog_sum / repetitions
+            else:
+                yield analog_sum, repetitions
 
+    def __call__(self, source):
+        repetitions_total = 0
+        analog_total = None
+        for analog_sum, repetitions in self.generate(source):
+            repetitions_total += repetitions
+            if analog_total is None:
+                analog_total = analog_sum
+            else:
+                analog_total += analog_sum
+        return analog_total / repetitions_total

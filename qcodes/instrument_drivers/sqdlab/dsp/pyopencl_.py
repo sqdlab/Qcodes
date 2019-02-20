@@ -24,7 +24,7 @@ class ShortToFloat(object):
                 const itype sign_bit = 1 << (bits - 1);
                 sample = (sample & (sign_bit - 1)) - (sample & sign_bit);
             }
-            output[out_idx] = (get_global_id(0) < blocklen) ? convert_float(input[in_idx]) : 0.;
+            output[out_idx] = (get_global_id(0) < blocklen) ? convert_${rtype}(sample) : 0.;
         }
 
         __kernel void to_${rtype}_with_markers(
@@ -217,12 +217,13 @@ class BroadcastMultiply(object):
 
 
 class DDC(BroadcastMultiply):
-    def __init__(self, ctx, if_freq=None):
+    def __init__(self, ctx, if_freq=None, scale=1.):
         super(DDC, self).__init__(ctx)
         self.if_freq = if_freq
+        self.scale = scale
         self.ddc_wf = None
 
-    def __call__(self, queue, in1, if_freq=None, **kwargs):
+    def __call__(self, queue, in1, if_freq=None, scale=None, **kwargs):
         '''
         Perform digital down-conversion of the input.
         
@@ -243,8 +244,11 @@ class DDC(BroadcastMultiply):
            if_freq = self.if_freq
         if if_freq is None:
             raise ValueError('if_freq is undefined.')
+        if scale is None:
+            scale = self.scale
+            
         if (self.ddc_wf is None) or (self.if_freq != if_freq) or (self.ddc_wf.shape != in1.shape[-2:]):
-            ddc_wf = np.exp(-1j*np.pi*if_freq*np.arange(in1.shape[-2]))[:,None]
+            ddc_wf = scale*np.exp(-1j*np.pi*if_freq*np.arange(in1.shape[-2]))[:,None]
             ddc_wf = np.tile(ddc_wf, (1,in1.shape[-1])).astype(np.complex64)
             self.ddc_wf = cl.array.to_device(queue, ddc_wf, async=True)
             self.if_freq = if_freq

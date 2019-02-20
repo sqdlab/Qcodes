@@ -161,9 +161,13 @@ class DigitalDownconversion(InstrumentChannel):
         super().__init__(parent, name, **kwargs)
         self.add_parameter(
             'intermediate_frequency', ManualParameter, 
-            vals=vals.Numbers(-1.0, 1.0), default_value=0.5, 
+            vals=vals.Numbers(-1.0, 1.0), default_value=-0.5, 
             docstring='Intermediate frequency as a multiple of the Nyquist '
                       'frequency, equal to half the sample rate.')
+        self.add_parameter(
+            'scale', ManualParameter, vals=vals.Numbers(), default_value=1., 
+            docstring='Global scaling factor for code-to-voltage conversion.'
+        )
 
     def __call__(self, float_samples):
         '''Shift frequencies in the input samples by -intermediate_frequency.
@@ -178,7 +182,7 @@ class DigitalDownconversion(InstrumentChannel):
         if float_samples.ndim < 2:
             raise ValueError('input samples must be at least two-dimensional')
         lo_waveform = np.exp(-1j*np.pi*self.intermediate_frequency.get()*
-                             np.arange(float_samples.shape[-2]))
+                             np.arange(float_samples.shape[-2]))*self.scale()
         if float_samples.dtype in [np.float16, np.float32]:
             lo_waveform = lo_waveform.astype(np.complex64)
         # broadcasting by element duplication is faster than numpy broadcasting
@@ -439,6 +443,10 @@ class TvMode(Instrument):
                 if len(marked_segments) < 2:
                     raise ValueError('Unable to determine number of segments.')
                 segments = marked_segments[1] - marked_segments[0]
+            if len(segments) > 2:
+                if np.any(np.diff(marked_segments) - segments):
+                    raise ValueError('Distance between (some) synchronization '
+                                     'markers does not equal number of segments.')
             if np.prod(analog.shape[:-2]) < segments:
                 raise ValueError('Each input block must contain at least '
                                  '`segments` ({}) segments.'.format(segments))
