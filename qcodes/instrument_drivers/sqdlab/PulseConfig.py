@@ -16,7 +16,7 @@ class ChannelPair(InstrumentChannel):
 
     def __init__(self, parent, name, awg_model):
         super().__init__(parent, name)
-        self.parent = parent
+        #self.parent = parent
         self.awg_model = awg_model
         self.channels = []
 
@@ -114,7 +114,7 @@ class Channel(InstrumentChannel):
 
     def __init__(self, parent, name, awg_model, awg_channel):
         super().__init__(parent, name)
-        self.parent = parent
+        #self.parent = parent
         self.awg_model = awg_model
         self.awg_channel = awg_channel
         # self._sampling_rate = self.parent.sampling_rate()

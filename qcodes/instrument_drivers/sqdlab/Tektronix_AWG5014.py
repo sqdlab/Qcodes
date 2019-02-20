@@ -23,7 +23,7 @@ class Tektronix_AWG_Channel(InstrumentChannel):
     
     def __init__(self, parent, name, channel) -> None:
         super().__init__(parent, name)
-        self.parent = parent
+        #self.parent = parent
         self.channel = channel
         
         amp_cmd = 'SOURce{}:VOLTage:LEVel:IMMediate:AMPLitude'.format(self.channel)
@@ -96,7 +96,7 @@ class Tektronix_AWG_Channel(InstrumentChannel):
 class Tektronix_AWG_Marker(InstrumentChannel):
         def __init__(self, parent, name, channel) -> None:
             super().__init__(parent, name)
-            self.parent = parent
+            #self.parent = parent
             self.channel = channel
             
             m_del_cmd = 'SOURce{}:MARKer{}:DELay'.format(self.parent.channel, self.channel)
