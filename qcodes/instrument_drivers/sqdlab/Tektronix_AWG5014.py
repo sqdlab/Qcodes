@@ -71,7 +71,8 @@ class Tektronix_AWG_Channel(InstrumentChannel):
                            label='Add input channel {}',
                            get_cmd=add_input_cmd + '?',
                            set_cmd=add_input_cmd + ' {}',
-                           vals=vals.Enum('"ESIG"', '"ESIGnal"', '""'),
+                           val_mapping={True: '"ESIG"',
+                                        False: '""'},
                            get_parser=self.parent.newlinestripper)
         self.add_parameter('filter'.format(self.channel),
                            label='Low pass filter channel {}'.format(self.channel),
@@ -106,7 +107,7 @@ class Tektronix_AWG_Marker(InstrumentChannel):
                          'LEVel:IMMediate:LOW').format(self.parent.channel, self.channel)
 
             self.add_parameter(
-                'ch{}_m{}_del'.format(self.parent.channel, self.channel),
+                'del',
                 label='Channel {} Marker {} delay'.format(self.parent.channel, self.channel),
                 unit='ns',
                 get_cmd=m_del_cmd + '?',
@@ -114,7 +115,7 @@ class Tektronix_AWG_Marker(InstrumentChannel):
                 vals=vals.Numbers(0, 1),
                 get_parser=float)
             self.add_parameter(
-                'ch{}_m{}_high'.format(self.parent.channel, self.channel),
+                'high',
                 label='Channel {} Marker {} high level'.format(self.parent.channel, self.channel),
                 unit='V',
                 get_cmd=m_high_cmd + '?',
@@ -122,7 +123,7 @@ class Tektronix_AWG_Marker(InstrumentChannel):
                 vals=vals.Numbers(-2.7, 2.7),
                 get_parser=float)
             self.add_parameter(
-                'ch{}_m{}_low'.format(self.parent.channel, self.channel),
+                'low',
                 label='Channel {} Marker {} low level'.format(self.parent.channel, self.channel),
                 unit='V',
                 get_cmd=m_low_cmd + '?',

@@ -27,6 +27,7 @@ class ChannelPair(InstrumentChannel):
                            get_parser=float,
                            vals=vals.Numbers(-120, 16),
                            docstring='Power output for mixer.')
+        self.mixer_power(16.)
         
         self.add_parameter('sigma', unit='s',
                            set_cmd=None,
