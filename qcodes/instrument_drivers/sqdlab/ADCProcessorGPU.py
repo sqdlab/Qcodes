@@ -1,10 +1,15 @@
+import functools
+
+import numpy as np
+import pyopencl as cl
+import reikna
+from qcodes import InstrumentChannel, ManualParameter, validators as vals
+
 from .ADCProcessor import (
     Unpacker, DigitalDownconversion, Filter, Mean, Synchronizer, TvMode, 
     Instrument, ManualParameter, vals
 )
 from . import dsp
-import numpy as np
-import pyopencl as cl
 
 def get_cl_context():
     '''get an opencl context for a gpu device'''
@@ -22,6 +27,9 @@ def get_cl_queue(cl_context):
     '''create a new opencl command queue'''
     return cl.CommandQueue(cl_context)
 
+def get_cl_thread(cl_queue):
+    api = reikna.cluda.ocl_api()
+    return api.Thread(cl_queue)
 
 class UnpackerGPU(Unpacker):
     '''Offload floating-point math to GPU, perform marker extraction on CPU'''
@@ -32,7 +40,8 @@ class UnpackerGPU(Unpacker):
     def to_float(self, raw_samples, out=None):
         return self._to_float_gpu(
             self.parent.gpu_queue, raw_samples, out=out, 
-            markers=False, bits=16-self.markers.get())
+            markers=False, bits=16-self.markers.get(), 
+            rtype=self.out_dtype.get())
 
 class DigitalDownconversionGPU(DigitalDownconversion):
     def __init__(self, *args, **kwargs):
@@ -52,10 +61,42 @@ class FilterGPU(Filter):
     def __call__(self, samples, out=None):
         if self.mode.get() != 'valid':
             raise NotImplementedError('Only convolution mode "valid" is supported.')
-        coeffs = self.coefficients.get().astype(np.float32)
+        coeffs = self.coefficients.get()
+        if (samples.dtype == np.complex64):
+            coeffs = coeffs.astype(np.float32)
+        elif (samples.dtype == np.complex128):
+            coeffs = coeffs.astype(np.float64)
+        else:
+            raise TypeError('samples must be float or double.')
         coeffs = np.tile(coeffs[:,None], (1, samples.shape[-1]))
         return self.convolve(self.parent.gpu_queue, samples, coeffs, 
                              self.decimation.get(), out=out)
+
+class FFTGPU(InstrumentChannel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.gpu_thread = get_cl_thread(self.parent.gpu_queue)
+        self.add_parameter('enabled', ManualParameter, 
+                           vals=vals.Bool(), default_value=False)
+        self.enabled.set(False)
+
+    @staticmethod
+    @functools.lru_cache()
+    def fft_factory(thread, dtype, shape):
+        axes = (-2,) if len(shape) == 3 else (-1,)
+        fft_ = dsp.fft.FFT(reikna.core.Type(dtype, shape), axes=axes)
+        return fft_.compile(thread)
+
+    def __call__(self, samples, out=None):
+        shape = samples.shape[:-1] if samples.shape[-1] == 1 else samples.shape
+        fft = self.fft_factory(self.gpu_thread, samples.dtype, shape)
+        if out is None:
+            out = cl.array.Array(self.parent.gpu_queue, samples.shape, samples.dtype)
+        else:
+            # TODO: check output type and shape here
+            pass
+        fft(out, samples, False)
+        return out
 
 class MeanGPU(Mean):
     def __init__(self, *args, **kwargs):
@@ -68,10 +109,10 @@ class MeanGPU(Mean):
 class SumGPU(Mean):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.sum = dsp.Sum(self.parent.gpu_context, np.complex64, np.complex64)
+        self.sum = dsp.Mean(self.parent.gpu_context)
 
     def __call__(self, data, ndim, out=None):
-        return self.sum(self.parent.gpu_queue, data, ndim=ndim, out=out).get()
+        return self.sum(self.parent.gpu_queue, data, ndim=ndim, mean=False, out=out).get()
 
 class TvModeGPU(TvMode):
     def __init__(self, name, cl_context=None, cl_queue=None, *args, **kwargs):
@@ -95,6 +136,7 @@ class TvModeGPU(TvMode):
         self.add_submodule('unpacker', UnpackerGPU(self, 'unpacker'))
         self.add_submodule('ddc', DigitalDownconversionGPU(self, 'ddc'))
         self.add_submodule('filter', FilterGPU(self, 'filter'))
+        self.add_submodule('fft', FFTGPU(self, 'fft'))
         self.add_submodule('sync', Synchronizer(self, 'sync'))
         #self.add_submodule('mean', MeanGPU(self, 'mean'))
         self.add_submodule('sum', SumGPU(self, 'sum'))
@@ -137,6 +179,7 @@ class TvModeGPU(TvMode):
         digital = None
         analog_ddc = None
         analog_fir = None
+        analog_fft = None
 
         segments = self.segments()
 
@@ -147,7 +190,11 @@ class TvModeGPU(TvMode):
             # process samples through the queue
             analog_ddc = self.ddc(analog, out=analog_ddc)
             analog_fir = self.filter(analog_ddc, out=analog_fir)
-            analog_math = analog_fir # TODO: channel maths goes here
+            if self.fft.enabled.get():
+                analog_fft = self.fft(analog_fir, out=analog_fft)
+            else:
+                analog_fft = analog_fir
+            analog_math = analog_fft # TODO: channel maths goes here
 
             # find first segment and number of segments
             if segments == 1:

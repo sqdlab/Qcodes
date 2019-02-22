@@ -4,6 +4,18 @@ import pyopencl.array
 from mako.template import Template
 import reikna
 
+def ctype(dtype):
+    '''Find opencl type for a numpy dtype.'''
+    type_map = [(np.float32, 'float'), 
+                (np.float64, 'double'), 
+                (np.complex64, 'float2'),
+                (np.complex128, 'double2')]
+    for _dtype, ctype in type_map:
+        if dtype == _dtype:
+            return ctype
+    raise TypeError('unknown type {}'.format(dtype))
+
+
 class ShortToFloat(object):
     code = """
         #define itype short
@@ -146,7 +158,7 @@ class BroadcastMultiply(object):
             ${in1_t} f1 = arg1[start+offset];
             ${in2_t} f2 = arg2[offset];
             ${out_t} product;
-            #if ${int(suffix == 'cc')}
+            #if ${complex}
             product = (${out_t})(f1.x*f2.x - f1.y*f2.y, f1.x*f2.y + f1.y*f2.x);
             #else
             product = f1*f2;
@@ -154,14 +166,40 @@ class BroadcastMultiply(object):
             output[start+offset] = product;
         }
     """
+    @staticmethod
+    def variant(in1_dtype, in2_dtype):
+        in1_ctype = ctype(in1_dtype)
+        in2_ctype = ctype(in2_dtype)
+        out_dtype = ( # different precisions must not be mixed
+            np.float32 if (in1_dtype == np.float32) and (in2_dtype == np.float32) else
+            np.float64 if (in1_dtype == np.float64) and (in2_dtype == np.float64) else
+            np.complex64 if (in1_dtype == np.complex64) or (in2_dtype == np.complex64) else
+            np.complex128
+        )
+        is_complex = ((in1_dtype == np.complex64) and (in2_dtype == np.complex64) or
+                      (in1_dtype == np.complex128) and (in2_dtype == np.complex128))
+        return dict(
+            suffix='{}_{}'.format(in1_ctype, in2_ctype), 
+            complex=1 if is_complex else 0, 
+            out_t=ctype(out_dtype), 
+            in1_t=in1_ctype, 
+            in2_t=in2_ctype,
+            out_dtype=out_dtype
+        )
+    
+    variants = [
+        (np.float32, np.float32), (np.float32, np.complex64), 
+        (np.complex64, np.float32), (np.complex64, np.complex64),
+        (np.float64, np.float64), (np.float64, np.complex128),
+        (np.complex128, np.float64), (np.complex128, np.complex128)
+    ]
+
     def __init__(self, context):
         # compile real/complex combinations from the same code
-        def variant(suffix, out_t, in1_t, in2_t): 
-            return dict(suffix=suffix, out_t=out_t, in1_t=in1_t, in2_t=in2_t)
-        variants = [variant('rr', 'float', 'float', 'float'), 
-                    variant('rc', 'float2', 'float', 'float2'),
-                    variant('cr', 'float2', 'float2', 'float'), 
-                    variant('cc', 'float2', 'float2', 'float2')]
+        variants = [
+            self.variant(in1_dtype, in2_dtype)
+            for in1_dtype, in2_dtype in self.variants
+        ]
         code = ''.join(Template(self.code).render(**kws) for kws in variants)
         self.prg = cl.Program(context, code).build()
     
@@ -185,11 +223,10 @@ class BroadcastMultiply(object):
         output: cl.Array, dtype=float32 or complex64
             Elementwise product of in1 and in2.
         '''
-        rtype = np.float32
-        ctype = np.complex64
         # check inputs & transfer to device
-        if (in1.dtype not in [rtype, ctype]) or (in2.dtype not in [rtype, ctype]):
-            raise TypeError('in1 and in2 must be an opencl arrays of float32 or complex64.')
+        if ((in1.dtype, in2.dtype) not in self.variants):
+            raise TypeError('in1 {}, in2 {} type combination not supported.'
+                            .format(in1.dtype, in2.dtype))
         if in1.shape[-in2.ndim:] != in2.shape[-in2.ndim:]:
             raise ValueError('Trailing dimension(s) of in1 and in2 must agree.')
         if not isinstance(in1, cl.array.Array):
@@ -197,11 +234,9 @@ class BroadcastMultiply(object):
         if not isinstance(in2, cl.array.Array):
             in2 = cl.array.to_device(queue, in2, async=True)
         # select kernel and output type
-        ftab = {(False, False): (self.prg.bcast_mul_rr, rtype),
-                (False, True): (self.prg.bcast_mul_rc, ctype),
-                (True, False): (self.prg.bcast_mul_cr, ctype),
-                (True, True): (self.prg.bcast_mul_cc, ctype)}
-        function, otype = ftab[(in1.dtype == np.complex64, in2.dtype == np.complex64)]
+        variant = self.variant(in1.dtype, in2.dtype)
+        function = getattr(self.prg, 'bcast_mul_{suffix}'.format(**variant))
+        otype = variant['out_dtype']
         # allocate or check output array
         if out is None:
             out = cl.array.Array(queue, in1.shape, otype)
@@ -249,7 +284,9 @@ class DDC(BroadcastMultiply):
             
         if (self.ddc_wf is None) or (self.if_freq != if_freq) or (self.ddc_wf.shape != in1.shape[-2:]):
             ddc_wf = scale*np.exp(-1j*np.pi*if_freq*np.arange(in1.shape[-2]))[:,None]
-            ddc_wf = np.tile(ddc_wf, (1,in1.shape[-1])).astype(np.complex64)
+            ddc_wf = np.tile(ddc_wf, (1,in1.shape[-1]))
+            if (in1.dtype == np.float32) or (in1.dtype == np.complex64):
+                ddc_wf = ddc_wf.astype(np.complex64)
             self.ddc_wf = cl.array.to_device(queue, ddc_wf, async=True)
             self.if_freq = if_freq
         return super(DDC, self).__call__(queue, in1, self.ddc_wf, **kwargs)
@@ -273,14 +310,14 @@ class Convolve(object):
             #define ARG2_SAMPLES ${arg2_samples}
         #endif
         #if ${channels} == 2
-            #define rtype float2
-            #define ctype float4
+            #define rtype ${rtype}2
+            #define ctype ${ctype}4
         #elif ${channels} == 4
-            #define rtype float4
-            #define ctype float8
+            #define rtype ${rtype}4
+            #define ctype ${ctype}8
         #else
-            #define rtype float
-            #define ctype float2
+            #define rtype ${rtype}
+            #define ctype ${ctype}2
         #endif
 
         #if (${channels} == 1) || (${channels} == 2) || (${channels} == 4)
@@ -399,12 +436,20 @@ class Convolve(object):
         * decimation == 1 is faster than 2 <= decimation < 16
         * use FFT convolution instead if arg2.shape[0] >> log2(arg1.shape[-2])
         '''
-        ctype = np.complex64
-        rtype = np.float32
-        if (arg1.dtype != ctype) or (arg1.ndim < 2):
-            raise TypeError('arg1 must be a three-dimensional vector of complex64')
-        if (arg2.dtype != rtype) or (arg2.ndim != 2):
-            raise TypeError('arg2 must be a two-dimensional vector of float32')
+        if arg1.dtype not in (np.complex64, np.complex128):
+            raise TypeError('arg1 must have dtype complex64 or complex128.')
+        ctype = arg1.dtype
+        if arg2.dtype not in (np.float32, np.float64):
+            raise TypeError('arg2 must have dtype float32 or float64.')
+        if ((arg1.dtype == np.complex64) and (arg2.dtype == np.float64) or 
+            (arg1.dtype == np.complex128) and (arg2.dtype == np.float32)):
+            raise TypeError('arg1 and arg2 must have the same precision.')
+        rtype = arg2.dtype
+
+        if arg1.ndim < 2:
+            raise TypeError('arg1 must be a three-dimensional array')
+        if (arg2.ndim != 2):
+            raise TypeError('arg2 must be a two-dimensional array')
         if arg1.shape[-1] != arg2.shape[-1]:
             raise ValueError('shapes {} and {} are incompatible.'.format(arg1.shape, arg2.shape))
         if not isinstance(arg1, cl.array.Array):
@@ -415,7 +460,16 @@ class Convolve(object):
         arg1_samples = arg1.shape[-2]
         arg2_samples = arg2.shape[0]
         channels = arg1.shape[-1]
-        self.compile(arg1_samples=arg1_samples, arg2_samples=arg2_samples, channels=channels)
+        typemap = {np.float32: 'float', np.complex64: 'float',
+                   np.float64: 'double', np.complex128: 'double'}
+        for _rtype, rctype in typemap.items():
+            if _rtype == rtype:
+                break
+        for _ctype, cctype in typemap.items():
+            if _ctype == ctype:
+                break
+        self.compile(arg1_samples=arg1_samples, arg2_samples=arg2_samples, 
+                     channels=channels, rtype=rctype, ctype=cctype)
 
         out_shape = arg1.shape[:-2] + ((arg1_samples-arg2_samples+decimation)//decimation, channels)
         blocks = np.prod(out_shape[:-2]) if arg1.ndim > 2 else 1
@@ -445,10 +499,11 @@ class Convolve(object):
 
 class Mean(object):
     code = """
-    __kernel void mean_${otype}_${itype}(
+    __kernel void sum_${otype}_${itype}(
         global ${otype} *output, 
         global ${itype} *input, 
-        unsigned int count
+        const unsigned int count,
+        const unsigned int mean
     ) {
         // sum over first axis of a two-dimensional array
         size_t offset=get_global_id(0), stride=get_global_size(0);
@@ -457,7 +512,11 @@ class Mean(object):
         for(size_t idx = offset; idx < stride*count; idx += stride) {
             sum += convert_${otype}(input[idx]);
         }
-        output[offset] = sum / convert_float(count);
+        if(mean) {
+            output[offset] = sum / convert_float(count);
+        } else {
+            output[offset] = sum;
+        }
     }    
     """
 
@@ -475,7 +534,7 @@ class Mean(object):
                 code += Template(self.code).render(**render_kws)
         self.prg = cl.Program(context, code).build()
 
-    def __call__(self, cq, in1, ndim, out=None):
+    def __call__(self, cq, in1, ndim, mean=True, out=None):
         '''
         Calculate the mean over the the leading dimensions of `in1` such that
         `ndim` dimensions remain.
@@ -518,8 +577,9 @@ class Mean(object):
         stride = np.prod((1,) + out_shape)#
         count = np.prod((1,) + in1.shape[::-1][ndim:])
         #print (out_shape, stride, count)
-        kernel = getattr(self.prg, 'mean_{}_{}'.format(ctype, ctype))
-        kernel(cq, (stride,), None, out.data, in1.data, np.uint32(count))
+        kernel = getattr(self.prg, 'sum_{}_{}'.format(ctype, ctype))
+        kernel(cq, (stride,), None, out.data, in1.data, np.uint32(count), 
+               np.uint32(mean))
         return out
 
 
