@@ -3,8 +3,7 @@ from pytest import fixture, raises, mark, skip, xfail
 
 import numpy as np
 
-from ... import dsp
-from ...dsp import fft
+import dsp.fft
 
 import reikna
 from reikna.core import Type, Annotation, Parameter
@@ -312,13 +311,13 @@ class TestFFTConvolve(object):
     @mark.parametrize('shape1,shape2,axis', 
                       [mark.skip([(1<<10, 4096), (1,129), -1]), 
                        mark.skip([(1<<10, 4096-128), (1,129), -1]), 
-                       [(1<<13,4096-128,1), (1,129,1), -2],
-                       [(1<<12,4096-128,2), (1,129,1), -2],
-                       [(1<<11,4096-128,4), (1,129,1), -2]],
-                      ids=['1k*4k_in', '1k*4k_out', '8k*4k_out', '4k*4k_out*2', '2k*4k_out*4'])
+                       [(1<<14,4096-128,1), (1,129,1), -2],
+                       [(1<<13,4096-128,2), (1,129,1), -2],
+                       [(1<<12,4096-128,4), (1,129,1), -2]],
+                      ids=['1k*4k_in', '1k*4k_out', '16k*4k_out', '8k*4k_out*2', '4k*4k_out*4'])
     def test_speed(self, thread, in1, in2, axis):
         '''
-        Results on RX460: (1<<26 samples)
+        Results on RX460:
             * 4k output is faster than 4k \pm 128, for fft and tvmode
             * fft 33.3ms, fft 0.2ms, mul 0.7ms, ifft 33.5ms with 4k input, 1k blocks
             * fft 1.8ms, fft 0.1ms, mul 0.7ms, fft 1.3ms with 4k output, 1k blocks

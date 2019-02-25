@@ -7,19 +7,14 @@ import scipy.signal
 import pyopencl as cl
 import pyopencl.array
 
-from ...dsp import ShortToFloat, BroadcastMultiply, Convolve, DDC, Mean, Sum
+from dsp import ShortToFloat, BroadcastMultiply, Convolve, DDC, Mean
 
 @fixture(scope='module')
 def ctx():
-    for platform in cl.get_platforms():
-        try:
-            return cl.Context(
-                dev_type=cl.device_type.GPU, 
-                properties=[(cl.context_properties.PLATFORM, platform)]
-            )
-        except cl.cffi_cl.RuntimeError:
-            pass
-    raise RuntimeError('Unable to create an opencl context for a GPU device.')
+    return cl.Context(
+        dev_type=cl.device_type.GPU, 
+        properties=[(cl.context_properties.PLATFORM, cl.get_platforms()[0])]
+    )
 
 @fixture(scope='module')
 def cq(ctx):
@@ -42,18 +37,10 @@ def adc(shape, markers=False):
     return arr.reshape(shape)
 
 def random(shape, dtype):
-    if np.issubdtype(dtype, np.floating):
+    if (dtype == np.float32) or (dtype == np.float64):
         return np.random.rand(*shape).astype(dtype)
-    elif np.issubdtype(dtype, np.complex):
-        return (np.random.rand(*shape) + 1j*np.random.rand(*shape)).astype(dtype)
-    elif np.issubdtype(dtype, np.integer):
-        iinfo = np.iinfo(dtype)
-        min_ = max(-2<<31, iinfo.min)
-        max_ = min((2<<31)-1, iinfo.max)
-        return np.random.random_integers(min_/4, max_/4, shape).astype(dtype)
     else:
-        raise ValueError('unable to generate random numbers for type {}'
-                         .format(dtype))
+        return (np.random.rand(*shape) + 1j*np.random.rand(*shape)).astype(dtype)
     return arr
 
 @fixture(params=[False, True])
@@ -112,9 +99,9 @@ class TestShortToFloat(object):
         if markers:
             return (((arr & 0x3fff) | np.where(arr & 0x2000, 0xc000, 0x0000)).astype(np.int16).astype(dtype),
                     ((arr >> 15) & 0x1).astype(np.uint8), 
-                    ((arr >> 14) & 0x1).astype(np.uint8))
+                    ((arr >> 14) & 0x1).astype(np.int8))
         else:
-            return arr.astype(np.int16).astype(dtype)
+            return arr.astype(np.int16).astype(np.float32)
 
     @mark.parametrize('dtype', [np.float32, np.float64])
     def test_results(self, stf, cq, reference, arr, markers, padding, pass_out, dtype):
@@ -288,13 +275,11 @@ class TestConvolve(object):
                 result[block][:,channel] = scipy.signal.fftconvolve(arg1[block][:,channel], arg2[:,channel], mode='valid')[::decimation]
         return result
 
-    @mark.parametrize('local_size', [True, False])
-    def test(self, cq, convolve, arg1, arg2, reference, decimation, pass_out, local_size):
+    def test(self, cq, convolve, arg1, arg2, reference, decimation, pass_out):
         arg1 = cl.array.to_device(cq, arg1)
         arg2 = cl.array.to_device(cq, arg2)
         out = cl.array.Array(cq, reference.shape, reference.dtype) if pass_out else None
-        kwargs = dict(local_size=None) if local_size else dict()
-        result = convolve(cq, arg1, arg2, decimation, out=out, **kwargs)
+        result = convolve(cq, arg1, arg2, decimation, out=out)
         assert result.shape == reference.shape
         print(result.get())
         print(reference)
@@ -360,114 +345,21 @@ class TestMean(object):
     #    self.run_average(cq, mean, shape, ndim=1, pass_out=False, dtype=dtype, local_size=local_size)
 
     
-class TestSum(object):
-    @fixture
-    def sum(self, ctx, dtype, in_dtype):
-        return Sum(ctx, dtype, in_dtype)
-
-    @fixture(params=[np.int8, np.uint8, np.int16, np.uint16, np.int32, np.uint32, 
-                 np.int64, np.uint64, np.float32, np.float64, np.complex64, 
-                 np.complex128])
-    def dtype(self, request):
-        return request.param
-        
-    @fixture(params=[np.int8, np.uint8, np.int16, np.uint16, np.int32, np.uint32, 
-                 np.int64, np.uint64, np.float32, np.float64, np.complex64, 
-                 np.complex128])
-    def in_dtype(self, request):
-        return request.param
-
-    @fixture
-    def shape(self):
-        return (64, 64)
-        
-    @fixture
-    def ndim(self):
-        return 1
-        
-    @fixture
-    def input(self, shape, in_dtype):
-        return random(shape, in_dtype)
-        
-    @fixture
-    def reference(self, input, shape, dtype, in_dtype, ndim):
-        if np.issubdtype(dtype, np.integer):
-            # gpu saturates in each operation, we need to manually take the sum
-            iinfo = np.iinfo(dtype)
-            input = input.reshape((int(np.prod(shape[::-1][ndim:][::-1]))), 
-                                   int(np.prod(shape[::-1][:ndim][::-1]))).T
-            results = np.empty((input.shape[0],), dtype=dtype)
-            for idx, chunk in enumerate(input):
-                result = 0
-                for item in chunk:
-                    result = max(iinfo.min, min(iinfo.max, result + dtype(item)))
-                results[idx] = result
-            return results.reshape(shape[::-1][:ndim][::-1])
-        else:
-            return input.astype(dtype).sum(axis=tuple(range(input.ndim-ndim)))
-            
-    def test_result(self, cq, sum, ndim, input, reference):
-        output = sum(cq, input, ndim)
-        assert np.all(output.get() == reference)
-    
 class TestIntegration(object):
     @fixture
     def shape(self):
-        #return (1<<14, 1, 4096-128, 1) # mul 45ms, convolve 100ms, mean 8ms
-        #return (1<<14, 1, 4096, 1) # mul 9ms, convolve 1250ms, mean 9ms
-        #return (1<<14, 1, 4096+128, 1) # mul 9ms, convolve 107ms, mean 9ms
-        #return (1<<13, 1, 4096+128, 2) # mul 9ms, convolve 85ms, mean 6ms
-        #return (1<<12, 1, 4096+128, 4) # mul 9ms, convolve 130ms, mean 5ms
-        #return (1<<11, 1, 4096+128, 8) # mul 9ms, convolve 202ms, mean 6ms
-        #return (1<<8, 1, 61, 4096+128, 2) # mul 17ms, convolve 167ms, mean 11ms
-        #return (1<<16, 1, 4096+128, 1) # mul 36ms, convolve 446ms, mean 268ms
-        return (1<<12, 1, 4096+128, 2) # runs in a reasonable time
-
-    @staticmethod
-    def adc(shape, if_freq, signal, noise, markers=False):
-        '''
-        Generate adc input that simulates a noisy readout signal generated by
-        a Rabi type experiment.
-
-        if_freq: `float`
-         Carrier frequency of the input signal, 1=Nyquist frequency
-        signal: `float`
-            Signal amplitude
-        noise: `float`
-            Noise amplitude
-        '''
-        averages, segments, samples, channels = shape
-        # for each waveform, determine the state of the qubit (True or False)
-        excited_exp = (1-np.cos(3*np.pi*(np.arange(segments))/segments))/2
-        excited_shot = excited_exp > np.random.rand(averages, segments, channels)
-        # map the state to iq points
-        ground = -(1+1j)/np.sqrt(2)
-        excited = (1+1j)/np.sqrt(2)
-        iq_shot = np.where(excited_shot, signal*excited, signal*ground)
-        # modulate carrier with iq points
-        carrier = np.exp(1j*np.pi*if_freq*np.arange(samples))
-        waveforms = np.real(iq_shot[...,None]*carrier)
-        # add noise
-        if noise:
-            waveforms += noise*(-1+2*np.random.rand(averages, segments, samples, channels))
-        # convert to short
-        scale = (2**13) if markers else (2**15)
-        data = np.clip(scale*waveforms, -scale, scale-1).astype(np.int16)
-        if markers:
-            # marker 1 is the sequence start marker
-            # marker 2 is at a fixed position
-            m1_start = min(10, samples)
-            m1_stop = min(m1_start+10, samples)
-            data &= 0x3ffff
-            data[:, 0, m1_start:m1_stop] |= 0x8000
-            data[:, :, m1_start:m1_stop] |= 0x4000
-        data = np.roll(data, np.random.randint(0, segments), 1)
-        return data
+        #return (1<<14, 4096-128, 1) # mul 45ms, convolve 100ms, mean 8ms
+        #return (1<<14, 4096, 1) # mul 9ms, convolve 1250ms, mean 9ms
+        #return (1<<14, 4096+128, 1) # mul 9ms, convolve 107ms, mean 9ms
+        return (1<<13, 4096+128, 2) # mul 9ms, convolve 85ms, mean 6ms
+        #return (1<<12, 4096+128, 4) # mul 9ms, convolve 130ms, mean 5ms
+        #return (1<<11, 4096+128, 8) # mul 9ms, convolve 202ms, mean 6ms
+        #return (1<<8, 61, 4096+128, 2) # mul 17ms, convolve 167ms, mean 11ms
+        #return (1<<16, 4096+128, 1) # mul 36ms, convolve 446ms, mean 268ms
 
     @fixture
-    def fir_coeffs(self, shape, bandwidth=0.1):
-        b = scipy.signal.firwin(129, [bandwidth]).astype(np.float32)
-        return np.tile(b[:,None], [1,shape[-1]])
+    def fir_coeffs(self, shape):
+        return np.random.rand(129,shape[-1]).astype(np.float32)
 
     @fixture
     def reps(self):
@@ -483,13 +375,9 @@ class TestIntegration(object):
         for _ in range(reps):
             float_data = stf(cq, adc, markers=markers, padding=padding)
             ddc_data = ddc(cq, float_data, if_freq=if_freq)
-            del float_data
             fir_data = convolve(cq, ddc_data, fir_coeffs, decimation)
-            del ddc_data
             out_data = mean(cq, fir_data, ndim=adc.ndim-1)
-            del fir_data
             out_data.get()
-            del out_data            
 
     def test_tvmode_single_buffered(self, ctx, cq, adc, fir_coeffs, reps, if_freq=0.1, markers=False, padding=0, decimation=1):
         '''One thread, single buffering'''

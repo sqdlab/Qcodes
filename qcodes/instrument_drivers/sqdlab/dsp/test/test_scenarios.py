@@ -6,9 +6,9 @@ import scipy.signal
 import pyopencl as cl
 import pyopencl.array
 
-import dsp
-from dsp import ShortToFloat, BroadcastMultiply, Convolve, DDC, Mean
-from dsp.fft import FFT, FFTConvolve
+from ... import dsp
+from ...dsp import ShortToFloat, BroadcastMultiply, Convolve, DDC, Mean
+from ...dsp.fft import FFT, FFTConvolve
 
 import reikna
 import reikna.algorithms
