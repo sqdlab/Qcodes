@@ -180,6 +180,7 @@ class TvModeGPU(TvMode):
         analog_ddc = None
         analog_fir = None
         analog_fft = None
+        analog_math = None
 
         segments = self.segments()
 
@@ -194,7 +195,7 @@ class TvModeGPU(TvMode):
                 analog_fft = self.fft(analog_fir, out=analog_fft)
             else:
                 analog_fft = analog_fir
-            analog_math = analog_fft # TODO: channel maths goes here
+            analog_math = self.math(analog_fft, out=analog_math) # TODO: channel maths goes here
 
             # find first segment and number of segments
             if segments == 1:
@@ -247,3 +248,7 @@ class TvModeGPU(TvMode):
             else:
                 analog_total += analog_sum
         return analog_total / repetitions_total
+
+    def math(self, array, out):
+        '''Override this function to do some maths'''
+        return array

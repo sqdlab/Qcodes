@@ -155,6 +155,21 @@ def Multiply(type):
         render_kwds=dict(ctype=type.ctype, complex=int(dtypes.is_complex(type)))
     )
 
+# class AbsoluteSquared(type):
+#     return PureParallel(
+#         [Parameter('output', Annotation(type, 'o')),
+#          Parameter('in1', Annotation(type, 'i'))],
+#         """
+#         ${ctype} f1 = ${in1.load_same};
+#         #if ${complex}
+#         ${output.store_same}((${ctype})(f1.x*f1.x + f1.y*f1.y));
+#         #else
+#         ${output.store_same}(f1*f1);
+#         #endif
+#         """,
+#         render_kwds=dict(ctype=type.ctype, complex=int(dtypes.is_complex(type)))
+#     )
+
 
 class FFT(FFT):
     def __init__(self, arr_t, padding=False, axes=None, **kwargs):
