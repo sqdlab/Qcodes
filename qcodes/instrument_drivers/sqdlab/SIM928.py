@@ -6,7 +6,8 @@ import time
 from qcodes import Instrument
 from qcodes.utils import validators as vals
 
-from qcodes.instrument_drivers.sqdlab.PrologixGPIBEthernet import PrologixGPIBEthernet
+
+from .PrologixGPIBEthernet import PrologixGPIBEthernet
 
 log = logging.getLogger(__name__)
 
