@@ -16,11 +16,10 @@ class ChannelPair(InstrumentChannel):
 
     def __init__(self, parent, name, awg_model):
         super().__init__(parent, name)
-        #self.parent = parent
         self.awg_model = awg_model
         self.channels = []
 
-        self.parameters['separation'] = self.parent.separation
+        self.parameters['separation'] = self._parent.separation
 
         self.add_parameter('mixer_power', unit='dBm',
                            set_cmd=None,
@@ -115,17 +114,16 @@ class Channel(InstrumentChannel):
 
     def __init__(self, parent, name, awg_model, awg_channel):
         super().__init__(parent, name)
-        #self.parent = parent
         self.awg_model = awg_model
         self.awg_channel = awg_channel
-        # self._sampling_rate = self.parent.sampling_rate()
-        self.parameters['pattern_length'] = self.parent.pattern_length
-        self.parameters['fixed_point'] = self.parent.fixed_point
-        self.parameters['sampling_rate_multiplier'] = self.parent.sampling_rate_multiplier
-        self.parameters['prepend'] = self.parent.prepend
-        self.parameters['append'] = self.parent.append
-        self.parameters['use_pinv'] = self.parent.use_pinv
-        self.parameters['ir_tlim'] = self.parent.ir_tlim
+        # self._sampling_rate = self._parent.sampling_rate()
+        self.parameters['pattern_length'] = self._parent.pattern_length
+        self.parameters['fixed_point'] = self._parent.fixed_point
+        self.parameters['sampling_rate_multiplier'] = self._parent.sampling_rate_multiplier
+        self.parameters['prepend'] = self._parent.prepend
+        self.parameters['append'] = self._parent.append
+        self.parameters['use_pinv'] = self._parent.use_pinv
+        self.parameters['ir_tlim'] = self._parent.ir_tlim
         self.channel_pair = None
 
         self.add_parameter('channel_type',
@@ -210,7 +208,7 @@ class Channel(InstrumentChannel):
                         ch.channel_pair = None
                         ch.channel_type('single')
                         break
-                self.parent.submodules = {key:val for key, val in self.parent.submodules.items() if val is not self.channel_pair}
+                self._parent.submodules = {key:val for key, val in self._parent.submodules.items() if val is not self.channel_pair}
                 self.channel_pair = None
             else:
                 return
@@ -218,7 +216,7 @@ class Channel(InstrumentChannel):
 
 
     def _set_sampling_rate(self, rate):
-        for _, parameter in self.parent.parameters.items():
+        for _, parameter in self._parent.parameters.items():
             if isinstance(parameter, (Channel)) and parameter._awg_model==self._awg_model:
                 parameter._sampling_rate = rate
 

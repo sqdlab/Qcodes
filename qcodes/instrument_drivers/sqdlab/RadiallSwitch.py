@@ -69,7 +69,7 @@ class SwitchChannel(InstrumentChannel):
 
             Route can be set to ROUTE_NONE or any port name to reset all ports
             but one and may return ROUTE_NONE, ROUTE_MULTIPLE or any port name.
-            '''
+            ''',
             get_cmd=self._get_route, set_cmd=self._set_route,  
             vals=vals.Enum(None, self.ROUTE_NONE, *portmap.keys())
         )
