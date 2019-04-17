@@ -538,7 +538,7 @@ class Agilent_N8241A(Instrument):
             else:
                 message = "Error message: {}".format(message)
             if status & IVI_ERROR_BASE != IVI_ERROR_BASE:
-                logging.warning(__name__+ ': '+message)
+                logging.debug(__name__+ ': '+message)
             else:
                 raise RuntimeError(message)
 
@@ -1062,12 +1062,12 @@ class Agilent_N8241A(Instrument):
         add_samples = 0
         if remain != 0:
             add_samples = 8 - remain
-            logging.warning(__name__ + ": waveform length not an integer"
+            logging.debug(__name__ + ": waveform length not an integer"
                             " multiple of 8. Append last element {:d} times"
                             " to match this condition.". format(add_samples))
         
             wfm_len += add_samples
-            wfm_data = np.pad(wfm_data, (0, add_samples), 'edge')
+            wfm_data = np.pad(wfm_data, (add_samples, 0), 'constant')
         return wfm_data
 
     def create_arb_waveform(self, wfm_data):
