@@ -402,9 +402,8 @@ class Agilent_N8241A(Instrument):
                            dtype=float,
                            set_cmd=False,
                            parameter_class=AGN_Parameter,
-                           docstring='sample clock frequency of the instrument. '
-                                    +'Setting the clock source must be accomplished with the '
-                                    +'configure_sample_clock function')
+                           docstring='sample clock frequency of the instrument.')
+        self.clock_frequency.set_raw = self._set_sample_clock_frequency
 
         self.add_parameter('clock_source',
                            attribute=AGN6030A_ATTR_CLOCK_SOURCE,
@@ -413,9 +412,8 @@ class Agilent_N8241A(Instrument):
                            val_mapping={'Internal' : AGN6030A_VAL_CLOCK_INTERNAL,
                                         'External' : AGN6030A_VAL_CLOCK_EXTERNAL},
                            set_cmd=False,
-                           docstring='sample clock source of the instrument. '
-                                    +'Setting the clock source must be accomplished with the '
-                                    +'configure_sample_clock function')
+                           docstring='sample clock source of the instrument.')
+        self.clock_source.set = self._set_sample_clock_source
 
         self.add_parameter('output_mode',
                            attribute=AGN6030A_ATTR_OUTPUT_MODE,
@@ -424,7 +422,7 @@ class Agilent_N8241A(Instrument):
                                         'Sequence' : AGN6030A_VAL_OUTPUT_SEQ,
                                         'Advanced Sequence' : AGN6030A_VAL_OUTPUT_ADV_SEQ},
                            parameter_class=AGN_Parameter)
-        self.output_mode.set_raw = self._configure_output_mode
+        self.output_mode.set = self._configure_output_mode
 
         self.add_parameter('model',
                            attribute=AGN6030A_ATTR_INSTRUMENT_MODEL,
@@ -997,6 +995,18 @@ class Agilent_N8241A(Instrument):
             )
         self._status_handle(rc)
         self.get_all()
+
+    def _set_sample_clock_source(self, source):
+        if source == 'Internal':
+          self.configure_sample_clock(0, 1.25e9)
+        elif source == 'External':
+          self.configure_sample_clock(0, self.clock_frequency())
+
+    def _set_sample_clock_frequency(self, freq):
+        if self.clock_source():
+          self.configure_sample_clock(1, freq)
+        else:
+          logging.warning('Cannot set frequency in internal clock source mode. Clock frequency is 1.25 GHz')
 
     def configure_sample_clock(self, source, freq):
         '''
