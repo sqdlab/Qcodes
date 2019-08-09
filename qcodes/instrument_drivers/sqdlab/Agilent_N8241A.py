@@ -403,7 +403,7 @@ class Agilent_N8241A(Instrument):
                            set_cmd=False,
                            parameter_class=AGN_Parameter,
                            docstring='sample clock frequency of the instrument.')
-        self.clock_frequency.set_raw = self._set_sample_clock_frequency
+        self.clock_frequency.set = self._set_sample_clock_frequency
 
         self.add_parameter('clock_source',
                            attribute=AGN6030A_ATTR_CLOCK_SOURCE,
