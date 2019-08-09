@@ -1251,3 +1251,4 @@ class M4i(Instrument):
         if verbose:
             print('card_memory: %s' % (data.value))
         return (data.value)
+        

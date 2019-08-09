@@ -156,9 +156,13 @@ class InstrumentBase(Metadatable, DelegateAttributes):
         self.submodules[name] = submodule
 
     def snapshot_base(self, update: bool=False,
-                      params_to_skip_update: Sequence[str]=None) -> Dict:
+                      params_to_skip_update: Optional[Sequence[str]] = None
+                      ) -> Dict:
         """
-        State of the instrument as a JSON-compatible dict.
+        State of the instrument as a JSON-compatible dict (everything that
+        the custom JSON encoder class
+        :class:'qcodes.utils.helpers.NumpyJSONEncoder'
+        supports).
 
         Args:
             update: If True, update the state by querying the
@@ -166,11 +170,16 @@ class InstrumentBase(Metadatable, DelegateAttributes):
             params_to_skip_update: List of parameter names that will be skipped
                 in update even if update is True. This is useful if you have
                 parameters that are slow to update but can be updated in a
-                different way (as in the qdac)
+                different way (as in the qdac). If you want to skip the
+                update of certain parameters in all snapshots, use the
+                `snapshot_get`  attribute of those parameters instead.
 
         Returns:
             dict: base snapshot
         """
+
+        if params_to_skip_update is None:
+            params_to_skip_update = []
 
         snap = {
             "functions": {name: func.snapshot(update=update)
@@ -182,20 +191,23 @@ class InstrumentBase(Metadatable, DelegateAttributes):
 
         snap['parameters'] = {}
         for name, param in self.parameters.items():
-            update = update
+            if param.snapshot_exclude:
+                continue
             if params_to_skip_update and name in params_to_skip_update:
-                update = False
+                update_par = False
+            else:
+                update_par = update
+
             try:
-                snap['parameters'][name] = param.snapshot(update=update)
+                snap['parameters'][name] = param.snapshot(update=update_par)
             except:
                 # really log this twice. Once verbose for the UI and once
                 # at lower level with more info for file based loggers
-                self.log.warning(f"Snapshot: Could not update parameter: "
-                                 f"{name}")
-                self.log.info(f"Details for Snapshot:",
-                              exc_info=True)
-
+                self.log.warning(f"Snapshot: Could not update "
+                                 f"parameter: {name}")
+                self.log.info(f"Details for Snapshot:", exc_info=True)
                 snap['parameters'][name] = param.snapshot(update=False)
+
         for attr in set(self._meta_attrs):
             if hasattr(self, attr):
                 snap[attr] = getattr(self, attr)
@@ -493,6 +505,7 @@ class Instrument(InstrumentBase, AbstractInstrument):
                    '(serial:{serial}, firmware:{firmware}) '
                    'in {t:.2f}s'.format(t=t, **idn))
         print(con_msg)
+        self.log.info(con_msg)
 
     def __repr__(self):
         """Simplified repr giving just the class and name."""

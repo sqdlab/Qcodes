@@ -10,6 +10,7 @@ import qcodes as qc
 
 TEST_LOG_MESSAGE = 'test log message'
 
+
 @pytest.fixture
 def remove_root_handlers():
     root_logger = logging.getLogger()
@@ -19,6 +20,26 @@ def remove_root_handlers():
         root_logger.removeHandler(handler)
     logger.logger.file_handler = None
     logger.logger.console_handler = None
+
+
+@pytest.fixture
+def awg5208():
+
+    from qcodes.instrument_drivers.tektronix.AWG5208 import AWG5208
+    import qcodes.instrument.sims as sims
+    visalib = sims.__file__.replace('__init__.py',
+                                    'Tektronix_AWG5208.yaml@sim')
+
+    logger.start_logger()
+
+    inst = AWG5208('awg_sim',
+                   address='GPIB0::1::INSTR',
+                   visalib=visalib)
+
+    try:
+        yield inst
+    finally:
+        inst.close()
 
 
 @pytest.fixture
@@ -203,7 +224,7 @@ def test_channels(model372):
     # rerun with instrument filter
     with logger.LogCapture(level=logging.DEBUG) as logs_filtered,\
             logger.filter_instrument(inst,
-                                    handler=logs_filtered.string_handler):
+                                     handler=logs_filtered.string_handler):
         inst.sample_heater.set_range_from_temperature(0.1)
 
     logs_filtered = [l for l in logs_filtered.value.splitlines()
@@ -231,3 +252,45 @@ def test_channels_nomessages(model372):
     logs = [l for l in logs.value.splitlines()
             if '[lakeshore' in l]
     assert len(logs) == 0
+    mock.close()
+
+
+@pytest.mark.usefixtures("remove_root_handlers", "awg5208")
+def test_instrument_connect_message():
+    """
+    Test that the connect_message method logs as expected
+
+    This test kind of belongs both here and in the tests for the instrument
+    code, but it is more conveniently written here
+    """
+
+    with open(logger.get_log_file_name(), 'r') as f:
+        lines = f.readlines()
+
+    con_mssg_log_line = lines[-1]
+
+    sep = logger.logger.LOGGING_SEPARATOR
+
+    con_mss = con_mssg_log_line.split(sep)[-1]
+    expected_con_mssg = ('Connected to: QCoDeS AWG5208 (serial:1000, '
+                         'firmware:0.1) in')
+
+    # the last part of the connect_message has info about how long it took
+    # to connect. We disregard that part here.
+
+    assert expected_con_mssg in con_mss
+
+
+@pytest.mark.usefixtures("remove_root_handlers")
+def test_installation_info_logging():
+    """
+    Test that installation information is logged upon starting the logging
+    """
+    logger.start_logger()
+
+    with open(logger.get_log_file_name(), 'r') as f:
+        lines = f.readlines()
+
+    assert 'QCoDeS version:' in lines[-3]
+    assert 'QCoDeS installed in editable mode:' in lines[-2]
+    assert 'QCoDeS requirements versions:' in lines[-1]

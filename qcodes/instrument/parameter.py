@@ -12,8 +12,8 @@ CombinedParameter). The _BaseParameter provides functionality that is common
 to all parameter types, such as ramping and scaling of values, adding delays
 (see documentation for details).
 
-This module defines four classes of parameters as well as some more specialized
-ones:
+This module defines the following basic classes of parameters as well as some
+more specialized ones:
 
 - :class:`.Parameter` is the base class for scalar-valued parameters.
     Two primary ways in which it can be used:
@@ -33,6 +33,11 @@ ones:
     :class:`qcodes.dataset.measurements.Measurement` but is not supported by the
     legacy :class:`qcodes.loops.Loop` and :class:`qcodes.measure.Measure`
     measurement types.
+
+- :class:`.DelegateParameter` is intended proxy-ing other parameters.
+    It forwards its ``get`` and ``set`` to the underlying source parameter,
+    while allowing to specify label/unit/etc that is different from the
+    source parameter.
 
 - :class:`.ArrayParameter` is an older base class for array-valued parameters.
     For any new driver we strongly recommend using
@@ -151,6 +156,11 @@ class _BaseParameter(Metadatable):
         snapshot_value (Optional[bool]): False prevents parameter value to be
             stored in the snapshot. Useful if the value is large.
 
+        snapshot_exclude (Optional[bool]): True prevents parameter to be
+            included in the snapshot. Useful if there are many of the same
+            parameter which are clogging up the snapshot.
+            Default False
+
         step (Optional[Union[int, float]]): max increment of parameter value.
             Larger changes are broken into multiple steps this size.
             When combined with delays, this acts as a ramp.
@@ -218,6 +228,7 @@ class _BaseParameter(Metadatable):
                  get_parser: Optional[Callable]=None,
                  set_parser: Optional[Callable]=None,
                  snapshot_value: bool=True,
+                 snapshot_exclude: bool=False,
                  max_val_age: Optional[float]=None,
                  vals: Optional[Validator]=None,
                  **kwargs) -> None:
@@ -232,6 +243,7 @@ class _BaseParameter(Metadatable):
         self._instrument = instrument
         self._snapshot_get = snapshot_get
         self._snapshot_value = snapshot_value
+        self.snapshot_exclude = snapshot_exclude
 
         if not isinstance(vals, (Validator, type(None))):
             raise TypeError('vals must be None or a Validator')
@@ -346,11 +358,13 @@ class _BaseParameter(Metadatable):
                 raise NotImplementedError('no set cmd found in' +
                                           ' Parameter {}'.format(self.name))
 
-    def snapshot_base(self, update: bool = False,
-                      params_to_skip_update: Sequence[str] = None) -> \
-            Dict[str, Any]:
+    def snapshot_base(self, update: bool = True,
+                      params_to_skip_update: Optional[Sequence[str]] = None
+                      ) -> Dict:
         """
-        State of the parameter as a JSON-compatible dict.
+        State of the parameter as a JSON-compatible dict (everything that
+        the custom JSON encoder class :class:'qcodes.utils.helpers.NumpyJSONEncoder'
+        supports).
 
         Args:
             update (bool): If True, update the state by calling
@@ -361,6 +375,10 @@ class _BaseParameter(Metadatable):
         Returns:
             dict: base snapshot
         """
+        if self.snapshot_exclude:
+            warnings.warn(
+                f"Parameter ({self.name}) is used in the snapshot while it "
+                f"should be excluded from the snapshot")
 
         if hasattr(self, 'get') and self._snapshot_get \
                 and self._snapshot_value and update:
@@ -863,6 +881,11 @@ class Parameter(_BaseParameter):
         snapshot_value (Optional[bool]): False prevents parameter value to be
             stored in the snapshot. Useful if the value is large.
 
+        snapshot_exclude (Optional[bool]): True prevents parameter to be
+            included in the snapshot. Useful if there are many of the same
+            parameter which are clogging up the snapshot.
+            Default False
+
         step (Optional[Union[int, float]]): max increment of parameter value.
             Larger changes are broken into multiple steps this size.
             When combined with delays, this acts as a ramp.
@@ -930,8 +953,11 @@ class Parameter(_BaseParameter):
                  **kwargs) -> None:
         super().__init__(name=name, instrument=instrument, vals=vals, **kwargs)
 
-        # Enable set/get methods if get_cmd/set_cmd is given
-        # Called first so super().__init__ can wrap get/set methods
+        # Enable set/get methods from get_cmd/set_cmd if given and
+        # no `get`/`set` or `get_raw`/`set_raw` methods have been defined
+        # in the scope of this class.
+        # (previous call to `super().__init__` wraps existing get_raw/set_raw to
+        # get/set methods)
         if not hasattr(self, 'get') and get_cmd is not False:
             if get_cmd is None:
                 if max_val_age is not None:
@@ -945,10 +971,11 @@ class Parameter(_BaseParameter):
 
         if not hasattr(self, 'set') and set_cmd is not False:
             if set_cmd is None:
-                self.set_raw = partial(self._save_val, validate=False)# type: Callable
+                self.set_raw: Callable = partial(self._save_val, validate=False)
             else:
                 exec_str_write = getattr(instrument, "write", None) if instrument else None
-                self.set_raw = Command(arg_count=1, cmd=set_cmd, exec_str=exec_str_write)# type: Callable
+                self.set_raw = Command(arg_count=1, cmd=set_cmd,
+                                       exec_str=exec_str_write)
             self.set = self._wrap_set(self.set_raw)
 
         self._meta_attrs.extend(['label', 'unit', 'vals'])
@@ -1130,6 +1157,58 @@ class ParameterWithSetpoints(Parameter):
         super().validate(value)
 
 
+class DelegateParameter(Parameter):
+    """
+    The `DelegateParameter` wraps a given `source`-parameter. Setting/getting
+    it results in a set/get of the source parameter with the provided
+    arguments.
+
+    The reason for using a `DelegateParameter` instead of the source parameter
+    is to provide all the functionality of the Parameter base class without
+    overwriting properties of the source: for example to set a different
+    Scaling factor and unit on the `DelegateParameter` without changing those
+    in the source parameter
+    """
+
+    def __init__(self, name: str, source: Parameter, *args, **kwargs):
+        self.source = source
+
+        for ka, param in zip(('unit', 'label', 'snapshot_value'),
+                             ('unit', 'label', '_snapshot_value')):
+            kwargs[ka] = kwargs.get(ka, getattr(self.source, param))
+
+        for cmd in ('set_cmd', 'get_cmd'):
+            if cmd in kwargs:
+                raise KeyError(f'It is not allowed to set "{cmd}" of a '
+                               f'DelegateParameter because the one of the '
+                               f'source parameter is supposed to be used.')
+
+        super().__init__(name, *args, **kwargs)
+
+    # Disable the warnings until MultiParameter has been
+    # replaced and name/label/unit can live in _BaseParameter
+    # pylint: disable=method-hidden
+    def get_raw(self):
+        return self.source.get()
+
+    # same as for `get_raw`
+    # pylint: disable=method-hidden
+    def set_raw(self, value):
+        self.source(value)
+
+    def snapshot_base(self, update: bool = True,
+                      params_to_skip_update: Optional[Sequence[str]] = None
+                      ) -> Dict:
+        snapshot = super().snapshot_base(
+            update=update,
+            params_to_skip_update=params_to_skip_update
+        )
+        snapshot.update(
+            {'source_parameter': self.source.snapshot(update=update)}
+        )
+        return snapshot
+
+
 class ArrayParameter(_BaseParameter):
     """
     A gettable parameter that returns an array of values.
@@ -1208,6 +1287,12 @@ class ArrayParameter(_BaseParameter):
             snapshot. Unlike Parameter this defaults to False as
             ArrayParameters are potentially huge.
 
+        snapshot_exclude (Optional[bool]): True prevents parameter to be
+            included in the snapshot. Useful if there are many of the same
+            parameter which are clogging up the snapshot.
+
+            Default False
+
         metadata (Optional[dict]): extra information to include with the
             JSON snapshot of the parameter
     """
@@ -1225,9 +1310,11 @@ class ArrayParameter(_BaseParameter):
                  docstring: Optional[str]=None,
                  snapshot_get: bool=True,
                  snapshot_value: bool=False,
+                 snapshot_exclude: bool=False,
                  metadata: Optional[dict]=None) -> None:
         super().__init__(name, instrument, snapshot_get, metadata,
-                         snapshot_value=snapshot_value)
+                         snapshot_value=snapshot_value,
+                         snapshot_exclude=snapshot_exclude)
 
         if hasattr(self, 'set'):
             # TODO (alexcjohnson): can we support, ala Combine?
@@ -1402,6 +1489,11 @@ class MultiParameter(_BaseParameter):
             snapshot. Unlike Parameter this defaults to False as
             MultiParameters are potentially huge.
 
+        snapshot_exclude (Optional[bool]): True prevents parameter to be
+            included in the snapshot. Useful if there are many of the same
+            parameter which are clogging up the snapshot.
+            Default False
+
         metadata (Optional[dict]): extra information to include with the
             JSON snapshot of the parameter
     """
@@ -1420,9 +1512,11 @@ class MultiParameter(_BaseParameter):
                  docstring: str=None,
                  snapshot_get: bool=True,
                  snapshot_value: bool=False,
+                 snapshot_exclude: bool=False,
                  metadata: Optional[dict]=None) -> None:
         super().__init__(name, instrument, snapshot_get, metadata,
-                         snapshot_value=snapshot_value)
+                         snapshot_value=snapshot_value,
+                         snapshot_exclude=snapshot_exclude)
 
         self._meta_attrs.extend(['setpoint_names', 'setpoint_labels',
                                  'setpoint_units', 'names', 'labels', 'units'])
@@ -1738,7 +1832,9 @@ class CombinedParameter(Metadatable):
 
     def snapshot_base(self, update=False):
         """
-        State of the combined parameter as a JSON-compatible dict.
+        State of the combined parameter as a JSON-compatible dict (everything that
+        the custom JSON encoder class :class:'qcodes.utils.helpers.NumpyJSONEncoder'
+        supports).
 
         Args:
             update (bool):
