@@ -422,7 +422,7 @@ class Agilent_N8241A(Instrument):
                                         'Sequence' : AGN6030A_VAL_OUTPUT_SEQ,
                                         'Advanced Sequence' : AGN6030A_VAL_OUTPUT_ADV_SEQ},
                            parameter_class=AGN_Parameter)
-        self.output_mode.set = self._configure_output_mode
+        self.output_mode.set_raw = self._configure_output_mode
 
         self.add_parameter('model',
                            attribute=AGN6030A_ATTR_INSTRUMENT_MODEL,
@@ -562,6 +562,7 @@ class Agilent_N8241A(Instrument):
             1001: advanced sequence
                 
         '''
+        display(output_mode)
         rc = self._dll.AGN6030A_ConfigureOutputMode(
             self._handle, ViInt32(output_mode))
         self._status_handle(rc)
