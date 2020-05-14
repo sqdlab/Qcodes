@@ -125,6 +125,7 @@ class Unpacker(InstrumentChannel):
             return None
         if raw_samples.ndim == 1:
             pack_markers = self.pack_markers_factory(1, markers, 16)
+            # rawsample[;,None] is NOT a mistake, None-> add a dimension to the array
             return pack_markers(raw_samples[:,None])
         else:
             channels = raw_samples.shape[-1]
@@ -443,7 +444,7 @@ class TvMode(Instrument):
                 if len(marked_segments) < 2:
                     raise ValueError('Unable to determine number of segments.')
                 segments = marked_segments[1] - marked_segments[0]
-            if len(segments) > 2:
+            if segments > 2:
                 if np.any(np.diff(marked_segments) - segments):
                     raise ValueError('Distance between (some) synchronization '
                                      'markers does not equal number of segments.')

@@ -186,8 +186,8 @@ class TvModeGPU(TvMode):
 
         for block in source:
             # separate analog and digital data
-            #analog, digital = self.unpacker(block, out=(analog, digital))
-            analog = self.unpacker.to_float(block, out=analog)
+            analog, digital = self.unpacker(block, out=(analog, digital))
+            # analog = self.unpacker.to_float(block, out=analog)
             # process samples through the queue
             analog_ddc = self.ddc(analog, out=analog_ddc)
             analog_fir = self.filter(analog_ddc, out=analog_fir)
