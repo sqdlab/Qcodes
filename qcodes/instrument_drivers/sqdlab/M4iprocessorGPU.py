@@ -1,5 +1,6 @@
 import scipy
 import logging
+import numpy as np
 from qcodes import validators as vals, ManualParameter, ArrayParameter
 from .ADCProcessorGPU import TvModeGPU
 from qcodes.instrument_drivers.Spectrum.M4i import M4i
@@ -16,6 +17,29 @@ class M4iprocessorGPU(Instrument):
             data = self.instrument.get_data()
             self.shape = data.shape
             return data
+
+    class FFTArray(ArrayParameter):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.freqs = None        
+            
+        def get_raw(self):
+            old_fft_enabled = self.instrument.fft_enabled()
+            self.instrument.fft_enabled(True)
+
+            data = self.instrument.get_data()
+            self.freqs = np.fft.fftfreq(data.shape[-2], 1/self.instrument._digi.sample_rate.get())
+            self.shape = data.shape
+            self.instrument.fft_enabled(old_fft_enabled)
+            return data
+
+    class PSDArray(FFTArray):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)            
+            
+        def get_raw(self):
+            data = super().get_raw()
+            return np.abs(data)**2
 
     def __init__(self, name, *args, digi=None, processor=None, **kwargs):
         super().__init__(name, *args, **kwargs)
@@ -53,7 +77,7 @@ class M4iprocessorGPU(Instrument):
                         (cutoff corresponds to 5MHz for a sampling rate of 500 MSamples/s)")
 
         self.add_parameter(
-            'fft',
+            'fft_enabled',
             set_cmd=self.processor.fft.enabled,
             label='Enable or disable FFT.', 
             vals=vals.Bool(),
@@ -94,6 +118,22 @@ class M4iprocessorGPU(Instrument):
         )
         # Makes sure that uqtools accepts this as a compatible parameter
         self.analog.settable = False
+
+        self.add_parameter(
+            'fft', self.FFTArray, shape=(1,1,1),
+            setpoint_names=('segment', 'sample', 'channel'), 
+            label='FFT of data returned by processor.',
+        )
+        # Makes sure that uqtools accepts this as a compatible parameter
+        self.fft.settable = False
+
+        self.add_parameter(
+            'psd', self.PSDArray, shape=(1,1,1),
+            setpoint_names=('segment', 'sample', 'channel'), 
+            label='Power Spectral Density returned by processor.',
+        )
+        # Makes sure that uqtools accepts this as a compatible parameter
+        self.psd.settable = False
 
     def check_digi(self):
         if self._digi is None:
@@ -226,11 +266,12 @@ class M4iprocessorGPU(Instrument):
         '''
         Gets processed data from the GPU. Processing involves gathering data and passing it through TvMode
         '''
-
+        assert len(self.processor.filter.coefficients.get()) <= self.samples.get(), "The length of \
+            the fir filter window must be less than or equal to the number of samples per acquisition"
         # TODO: segments can be arbitrary on the adc, but tvmode 
         # does not yet support variable-sized blocks
         num_of_acquisitions = self.averages.get()*max(1, self.segments.get())
-        max_blocksize = min(2**15, self.samples.get()*num_of_acquisitions)
+        max_blocksize = min(2**14, self.samples.get()*num_of_acquisitions)
         blocks = max(num_of_acquisitions//max_blocksize, 1)
         # WARNING DO NOT SET blocksize = 1; it needs AT to be LEAST 2!!!!!!
         blocksize = min(max_blocksize, num_of_acquisitions)
@@ -240,6 +281,7 @@ class M4iprocessorGPU(Instrument):
             blocksize=blocksize
         )
         return self.processor(source)
+        # return source
     
     def manual_close(self):
         self._digi.close()
