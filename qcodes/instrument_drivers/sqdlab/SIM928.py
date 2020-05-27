@@ -405,7 +405,7 @@ class SIM928_PLX_Proxy(Instrument):
             instrument's JSON snapshot.
     """
 
-    def __init__(self, name, remote_proxy, gpib_slots, slot_names=None, **kw):
+    def __init__(self, name, remote_proxy, gpib_slots, slot_names=None, step = 0.0025, **kw):
         
         # super().__init__(address=address, type='rs232')
         self._proxy = remote_proxy
@@ -427,6 +427,9 @@ class SIM928_PLX_Proxy(Instrument):
         self.write('FLSH')  # flush port buffers
         self.write('SRST')  # SIM reset (causes 100 ms delay)
         time.sleep(0.5)
+
+        self.step = step
+        
         
         self.modules = self.find_modules()
         for i in self.modules:
@@ -439,7 +442,7 @@ class SIM928_PLX_Proxy(Instrument):
                                get_cmd=partial(self.get_voltage, i),
                                set_cmd=partial(self.set_voltage, i),
                                inter_delay=0.05,
-                               step=0.0025)
+                               step=self.step)
 
     def write(self, msg):
         '''
@@ -550,6 +553,33 @@ class SIM928_PLX_Proxy(Instrument):
         if not isinstance(i, int):
             i = self.module_nr[i]
         self.write('SNDT {},"{}"'.format(i, cmd))
+
+     def get_step(self) -> float:
+        """
+        Get the output voltage of a module.
+
+        Args:
+           i (int/str): Slot number or module name (as in ``slot_names``)
+               of the module to get the voltage of.
+
+        Returns:
+            The voltage change step
+        """
+        return float(self.step)
+
+    def set_step(self, new_step) -> None:
+        """
+        Get the output voltage of a module.
+
+        Args:
+           i (int/str): Slot number or module name (as in ``slot_names``)
+               of the module to get the voltage of.
+
+        Returns:
+            The voltage change step
+        """
+        self.step = new_step
+        
 
     def set_voltage(self, i, voltage):
         """

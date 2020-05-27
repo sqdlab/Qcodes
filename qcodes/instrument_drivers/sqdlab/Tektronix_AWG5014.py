@@ -90,6 +90,9 @@ class Tektronix_AWG_Channel(InstrumentChannel):
                            set_cmd=dc_out_cmd + ' {}',
                            vals=vals.Numbers(-3, 5),
                            get_parser=float)
+        # changing name of DC_out because there are problems with two channels having the same parameter name
+        self.DC_out.name = '{}_{}'.format(self.name, self.DC_out.name)
+        
                            
         self.add_submodule('m1', Tektronix_AWG_Marker(self, 'm1', 1))
         self.add_submodule('m2', Tektronix_AWG_Marker(self, 'm2', 2))

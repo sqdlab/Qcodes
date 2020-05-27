@@ -3,12 +3,16 @@ import logging
 import numpy as np
 from qcodes import validators as vals, ManualParameter, ArrayParameter
 from .ADCProcessorGPU import TvModeGPU
+# from qcodes.instrument_drivers.sqdlab.ADCProcessorGPU import TvModeGPU
 from qcodes.instrument_drivers.Spectrum.M4i import M4i
 import qcodes.instrument_drivers.Spectrum.pyspcm as spcm
 from qcodes.instrument.base import Instrument
 import qcodes
 
 class M4iprocessorGPU(Instrument):
+    class M4iprocessorGPUException(Exception):
+        pass
+
     class DataArray(ArrayParameter):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)            
@@ -48,6 +52,8 @@ class M4iprocessorGPU(Instrument):
 
         self.check_digi()
         self.check_processor()
+
+        self.override_card_lock = False
         
         self.add_parameter(
             'if_freq', 
@@ -271,17 +277,33 @@ class M4iprocessorGPU(Instrument):
         # TODO: segments can be arbitrary on the adc, but tvmode 
         # does not yet support variable-sized blocks
         num_of_acquisitions = self.averages.get()*max(1, self.segments.get())
-        max_blocksize = min(2**14, self.samples.get()*num_of_acquisitions)
+        assert num_of_acquisitions >= 16, "Number of acquisitions must be greater than or equal to 16."
+        max_blocksize = min(2**28//self.samples.get(), self.samples.get()*num_of_acquisitions)
         blocks = max(num_of_acquisitions//max_blocksize, 1)
         # WARNING DO NOT SET blocksize = 1; it needs AT to be LEAST 2!!!!!!
         blocksize = min(max_blocksize, num_of_acquisitions)
-        source = self._digi.multiple_trigger_fifo_acquisition(
-            segments=blocks*blocksize,
-            samples=self.samples.get(), 
-            blocksize=blocksize
-        )
-        return self.processor(source)
-        # return source
+
+        # getting last error. If an error occurred, the card is locked to all functions until the error is read.
+        # Note: You may get the last error multiple times.
+        # This function is only enabled if you want to override the card lock.
+        if self.override_card_lock:
+            self._digi.get_error_info32bit()
+
+        try:
+            source = self._digi.multiple_trigger_fifo_acquisition(
+                segments=blocks*blocksize,
+                samples=self.samples.get(), 
+                blocksize=blocksize
+            )
+            return self.processor(source)
+            # return source
+        except ValueError as e:
+            raise self.M4iprocessorGPUException('Check if the sequece start trigger is connected and is arriving after the acquisition trigger') from e
+        except RuntimeError as e:
+            msg = ("The card raised an exception. It may be locked. Try getting the error using "
+                "{}._digi.get_error_info32bit(verbose=True) or "
+                "setting {}.override_card_lock=True.".format(self.name, self.name))
+            raise self.M4iprocessorGPUException(msg) from e
     
     def manual_close(self):
         self._digi.close()
@@ -289,11 +311,12 @@ class M4iprocessorGPU(Instrument):
         
 
 # def runme():
-#     new_digi = Digitizer("one")
-#     new_digi.segments(5)
+#     new_digi = M4iprocessorGPU("one")
+#     new_digi.segments(1)  
+#     new_digi.averages(2**17)
+#     new_digi.samples(2**15)  
 
-#     new_digi.decimation.set(3)
-
+#     new_digi.decimation.set(1)
 #     import uqtools as uq
 
 #     tv = uq.ParameterMeasurement(new_digi.analog, data_save=True)
@@ -301,7 +324,10 @@ class M4iprocessorGPU(Instrument):
 #     tv_segment_av = uq.Integrate(tv, 'segment', average=True)
 #     tv_channel_av = uq.Integrate(tv, 'channel', average=True)
 
-#     # data = new_digi.get_data()
+#     print("Ithee bro")
+#     data = new_digi.get_data()
+#     # print(data)
+#     # print(type(data[0]))
 #     # print(data.shape)
 #     # new_digi.manual_close()
 
