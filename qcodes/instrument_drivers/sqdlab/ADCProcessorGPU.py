@@ -4,6 +4,7 @@ import numpy as np
 import pyopencl as cl
 import reikna
 from qcodes import InstrumentChannel, ManualParameter, validators as vals
+from nnet import net, adjust_m4i_data, F
 
 from .ADCProcessor import (
     Unpacker, DigitalDownconversion, Filter, Mean, Synchronizer, TvMode, 
@@ -142,7 +143,7 @@ class TvModeGPU(TvMode):
         self.add_submodule('sum', SumGPU(self, 'sum'))
         self.connect_message()
 
-    def generate(self, source, mean=False):
+    def generate(self, source, mean=False, classify=False):
         '''Process blocks of samples provided by source.
 
         Each block is processed through the following processing pipeline:
@@ -186,7 +187,7 @@ class TvModeGPU(TvMode):
 
         for block in source:
             # separate analog and digital data
-            #analog, digital = self.unpacker(block, out=(analog, digital))
+            # analog, digital = self.unpacker(block, out=(analog, digital))
             analog = self.unpacker.to_float(block, out=analog)
             # process samples through the queue
             analog_ddc = self.ddc(analog, out=analog_ddc)
@@ -222,10 +223,20 @@ class TvModeGPU(TvMode):
             repetitions = analog.shape[0] // segments
             analog_trunc = (analog_math[:repetitions*segments,...]
                             .reshape((repetitions, segments)+analog_math.shape[1:]))
+
+            # nn classification
+            print(net.training)
+            converted_data = adjust_m4i_data(analog_trunc.get())
+            net.eval()
+            # convert net output to one of 0(g), 1(e), 2(f)
+            state = F.log_softmax(net(converted_data), dim=1).argmax(dim=1).detach().numpy()
+
             analog_sum = self.sum(analog_trunc, analog_trunc.ndim-1)
             if first_segment:
                 analog_sum = np.roll(analog_sum, -first_segment, axis=0)
+
             if mean:
+                # yield (analog_sum / repetitions, (analog_sum / repetitions, state))[classify]
                 yield analog_sum / repetitions
             else:
                 yield analog_sum, repetitions
