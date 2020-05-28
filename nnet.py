@@ -105,4 +105,5 @@ net = nn.Sequential(
 saved_model = 'C:/Users/Experiment/Documents/Qcodes/models/cnnC_f_1590133074_batch.pth'
 net.load_state_dict(torch.load(saved_model))
 net.eval()
-print(net.training)
+# Gpu?
+net.double()
