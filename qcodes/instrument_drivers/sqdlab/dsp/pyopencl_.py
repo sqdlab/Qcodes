@@ -132,7 +132,7 @@ class ShortToFloat(object):
             function = getattr(self.prg, 'to_{}_with_markers'.format(ctype))
             function(
                 queue, global_size, None, 
-                out.data, marker1.data, marker2.data, in1.data, np.uint32(in1.shape[-1])
+                out.data, marker1.data, marker2.data, in1.data, np.uint32(in1.shape[-1], np.uint32(bits))
             )
             return out, marker1, marker2
         else:
@@ -495,6 +495,7 @@ class Convolve(object):
             local_size = (min(max_dims[0], global_size[0]),)
             local_size += (min(max_dims[1], global_size[1], max_wgs//local_size[0]),)
             local_size += (min(max_dims[2], global_size[2], max_wgs//np.prod(local_size)),)
+        local_size = None
         kernel(queue, global_size, local_size, out.data, arg1.data, arg2.data, 
                np.int32(decimation))
         return out
