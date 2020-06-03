@@ -183,6 +183,16 @@ class TvModeGPU(TvMode):
         analog_fft = None
         analog_math = None
 
+        class ADCProcessorGPUException(Exception):
+            # Releases GPUbuffers if any exception occurs.
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                for data in digital, analog_math, analog_fft, analog_fir, analog_ddc, analog:
+                    try:
+                        data.data.release()
+                    except cl._cl.LogicError:
+                        pass
+
         segments = self.segments()
 
         for block in source:
@@ -204,20 +214,20 @@ class TvModeGPU(TvMode):
             else:
                 digital = self.unpacker.pack_markers(block, out=digital)
                 if digital is None:
-                    raise ValueError('Enable marker extraction in unpacker '
+                    raise ADCProcessorGPUException('Enable marker extraction in unpacker '
                                      'to use auto segments.')
                 marked_segments = self.sync(digital)
                 if len(marked_segments) == 0:
-                    raise ValueError('No synchronization markers received.')
+                    raise ADCProcessorGPUException('No synchronization markers received.')
                 first_segment = marked_segments[0]
                 if (segments == 0) or (segments is None):
                     if len(marked_segments) < 2:
-                        raise ValueError('Need at least two synchronization '
+                        raise ADCProcessorGPUException('Need at least two synchronization '
                                          'markers to determine the number of '
                                          'segments.')
                     segments = marked_segments[1] - marked_segments[0]
             if np.prod(analog.shape[:-2]) < segments:
-                raise ValueError('Each input block must contain at least '
+                raise ADCProcessorGPUException('Each input block must contain at least '
                                  '`segments` ({}) segments.'.format(segments))
             # truncate & reshape to (iteration, segment, sample, channel)
             repetitions = analog.shape[0] // segments

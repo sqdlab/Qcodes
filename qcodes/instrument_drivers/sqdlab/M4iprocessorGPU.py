@@ -279,6 +279,7 @@ class M4iprocessorGPU(Instrument):
         num_of_acquisitions = self.averages.get()*max(1, self.segments.get())
         assert num_of_acquisitions >= 16, "Number of acquisitions must be greater than or equal to 16."
         max_blocksize = min(2**28//self.samples.get(), self.samples.get()*num_of_acquisitions)
+        assert self.segments.get()*self.samples.get() < max_blocksize, "The number of segments does not fit in 1 block of GPU processing. Reduce number of segments or samples."
         blocks = max(num_of_acquisitions//max_blocksize, 1)
         # WARNING DO NOT SET blocksize = 1; it needs AT to be LEAST 2!!!!!!
         blocksize = min(max_blocksize, num_of_acquisitions)
@@ -298,6 +299,7 @@ class M4iprocessorGPU(Instrument):
             return self.processor(source)
             # return source
         except ValueError as e:
+            # self.processor.close()
             raise self.M4iprocessorGPUException('Check if the sequece start trigger is connected and is arriving after the acquisition trigger') from e
         except RuntimeError as e:
             msg = ("The card raised an exception. It may be locked. Try getting the error using "
@@ -312,24 +314,24 @@ class M4iprocessorGPU(Instrument):
 
 # def runme():
 #     new_digi = M4iprocessorGPU("one")
-#     new_digi.segments(1)  
-#     new_digi.averages(2**17)
-#     new_digi.samples(2**15)  
+#     new_digi.segments(5)  
+#     new_digi.averages(2**14)
+#     new_digi.samples(2**11)  
 
 #     new_digi.decimation.set(1)
-#     import uqtools as uq
+# #     import uqtools as uq
 
-#     tv = uq.ParameterMeasurement(new_digi.analog, data_save=True)
-#     tv_sample_av = uq.Integrate(tv, 'sample', average=True)
-#     tv_segment_av = uq.Integrate(tv, 'segment', average=True)
-#     tv_channel_av = uq.Integrate(tv, 'channel', average=True)
+# #     tv = uq.ParameterMeasurement(new_digi.analog, data_save=True)
+# #     tv_sample_av = uq.Integrate(tv, 'sample', average=True)
+# #     tv_segment_av = uq.Integrate(tv, 'segment', average=True)
+# #     tv_channel_av = uq.Integrate(tv, 'channel', average=True)
 
-#     print("Ithee bro")
+# #     print("Ithee bro")
 #     data = new_digi.get_data()
-#     # print(data)
-#     # print(type(data[0]))
-#     # print(data.shape)
-#     # new_digi.manual_close()
+# #     # print(data)
+# #     # print(type(data[0]))
+# #     # print(data.shape)
+# #     # new_digi.manual_close()
 
 # if __name__ == '__main__':
 #     runme()
