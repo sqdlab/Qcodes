@@ -15,7 +15,7 @@ class M4iprocessorGPU(Instrument):
 
     class DataArray(ArrayParameter):
         def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)            
+            super().__init__(*args, snapshot_value=False, **kwargs)            
             
         def get_raw(self):
             if 'singleshot' in self.name:
