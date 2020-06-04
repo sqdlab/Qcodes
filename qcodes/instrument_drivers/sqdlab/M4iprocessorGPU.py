@@ -18,8 +18,14 @@ class M4iprocessorGPU(Instrument):
             super().__init__(*args, **kwargs)            
             
         def get_raw(self):
-            data = self.instrument.get_data()
-            self.shape = data.shape
+            if 'singleshot' in self.name:
+                self.instrument.processor.singleshot(True)
+                data = self.instrument.get_data()
+                self.shape = (len(data), *data[0].shape)
+            else:
+                self.instrument.processor.singleshot(False)
+                data = self.instrument.get_data()
+                self.shape = data.shape
             return data
 
     class FFTArray(ArrayParameter):
@@ -118,8 +124,23 @@ class M4iprocessorGPU(Instrument):
                        Connect the sequence start trigger to X0 (X1) for channels 0 (1) of the digitizer.")
 
         self.add_parameter(
+            'sample_rate',
+            get_cmd=self._digi.sample_rate.get,
+            set_cmd=self._set_sample_rate,
+            label='Sampling rate',
+            vals=vals.Numbers())
+
+        self.add_parameter(
             'analog', self.DataArray, shape=(1,1,1),
             setpoint_names=('segment', 'sample', 'channel'), 
+            label='Analog data array returned by processor.',
+        )
+        # Makes sure that uqtools accepts this as a compatible parameter
+        self.analog.settable = False
+
+        self.add_parameter(
+            'singleshot_analog', self.DataArray, shape=(1,1,1,1),
+            setpoint_names=('iterations', 'segment', 'sample', 'channel'), 
             label='Analog data array returned by processor.',
         )
         # Makes sure that uqtools accepts this as a compatible parameter
@@ -267,6 +288,10 @@ class M4iprocessorGPU(Instrument):
 
     def _set_if_freq(self, freq):
         self.processor.ddc.intermediate_frequency.set(2*-freq/self._digi.sample_rate.get())
+    
+    def _set_sample_rate(self, rate):
+        self._digi.sample_rate.set(rate)
+        self.sample_rate.get()
 
     def get_data(self):
         '''
@@ -296,6 +321,11 @@ class M4iprocessorGPU(Instrument):
                 samples=self.samples.get(), 
                 blocksize=blocksize
             )
+            self.processor._singleshot_shape = (self.averages.get(),
+                                                self.segments.get(),
+                                                (self.samples.get() - len(self.fir_coeffs.get()) + self.processor.filter.decimation.get())//self.processor.filter.decimation.get(),
+                                                self.channels.get())
+            self.processor._blocksize = blocksize
             return self.processor(source)
             # return source
         except ValueError as e:
@@ -314,9 +344,12 @@ class M4iprocessorGPU(Instrument):
 
 # def runme():
 #     new_digi = M4iprocessorGPU("one")
-#     new_digi.segments(5)  
-#     new_digi.averages(2**14)
-#     new_digi.samples(2**11)  
+#     new_digi.segments(1)  
+#     new_digi.averages(2**21)
+#     new_digi.samples(2**8) 
+#     new_digi.sample_rate(100e6)
+
+#     print('Sample Rate : ', new_digi.sample_rate())
 
 #     new_digi.decimation.set(1)
 # #     import uqtools as uq
@@ -327,7 +360,29 @@ class M4iprocessorGPU(Instrument):
 # #     tv_channel_av = uq.Integrate(tv, 'channel', average=True)
 
 # #     print("Ithee bro")
-#     data = new_digi.get_data()
+#     # data = new_digi.get_data()
+#     data = np.array(new_digi.singleshot_analog())
+#     # data = np.array(new_digi.analog())
+#     input("Enter")
+#     # del data
+#     # import gc
+#     # gc.collect()
+#     input("Enget")
+#     new_digi.segments(1)  
+#     new_digi.averages(2**6)
+#     new_digi.samples(2**12)  
+
+#     new_digi.decimation.set(1)
+#     data = np.array(new_digi.singleshot_analog())
+#     # data = np.array(new_digi.analog())
+#     input("Enter to call gc")
+#     import gc
+#     gc.collect()
+#     input("Please press ctrl-C")
+#     # del data
+#     # data = np.array(new_digi.analog())
+#     data = np.array(new_digi.singleshot_analog())
+#     print(data.shape)
 # #     # print(data)
 # #     # print(type(data[0]))
 # #     # print(data.shape)
