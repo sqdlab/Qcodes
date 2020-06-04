@@ -4,7 +4,6 @@ import numpy as np
 import pyopencl as cl
 import reikna
 from qcodes import InstrumentChannel, ManualParameter, validators as vals
-from nnet import net, adjust_m4i_data, F
 
 from .ADCProcessor import (
     Unpacker, DigitalDownconversion, Filter, Mean, Synchronizer, TvMode, 
@@ -239,10 +238,6 @@ class TvModeGPU(TvMode):
                 repetitions = analog.shape[0] // segments
                 analog_trunc = (analog_math[:repetitions*segments,...]
                                 .reshape((repetitions, segments)+analog_math.shape[1:]))
-                # print(f"HERE BRO {np.shape(analog_trunc.get())}")
-                # converted_data = adjust_m4i_data(analog_trunc.get())
-                
-                # print(net(converted_data))
             
                 if self.singleshot():
                     analog_trunc_np = analog_trunc.get()
@@ -252,7 +247,6 @@ class TvModeGPU(TvMode):
                 else:
                     analog_sum = self.sum(analog_trunc, analog_trunc.ndim-1)
                     if first_segment:
-                        print(first_segment)
                         analog_sum = np.roll(analog_sum, -first_segment, axis=0)
                     if mean:
                         yield analog_sum / repetitions
