@@ -128,6 +128,9 @@ class TvModeGPU(TvMode):
             cl_queue = get_cl_queue(cl_context)
         self.gpu_context = cl_context
         self.gpu_queue = cl_queue
+
+        self.add_parameter('singleshot', ManualParameter, 
+                           vals=vals.Bool(), initial_value=False)
         
         self.add_parameter('segments', ManualParameter, 
                            label='Number of segments. Zero for automatic.', 
@@ -182,64 +185,88 @@ class TvModeGPU(TvMode):
         analog_fir = None
         analog_fft = None
         analog_math = None
+        analog_trunc = None
+        analog_sum = None
+
+        class ADCProcessorGPUException(Exception):
+            # Releases GPUbuffers if any exception occurs.
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                for data in digital, analog_math, analog_fft, analog_fir, analog_ddc, analog:
+                    try:
+                        data.data.release()
+                    except cl._cl.LogicError:
+                        pass
 
         segments = self.segments()
+        try:
 
-        for block in source:
-            # separate analog and digital data
-            # analog, digital = self.unpacker(block, out=(analog, digital))
-            analog = self.unpacker.to_float(block, out=analog)
-            # process samples through the queue
-            analog_ddc = self.ddc(analog, out=analog_ddc)
-            analog_fir = self.filter(analog_ddc, out=analog_fir)
-            if self.fft.enabled.get():
-                analog_fft = self.fft(analog_fir, out=analog_fft)
-            else:
-                analog_fft = analog_fir
-            analog_math = self.math(analog_fft, out=analog_math) # TODO: channel maths goes here
+            for block in source:
+                # separate analog and digital data
+                # analog, digital = self.unpacker(block, out=(analog, digital))
+                analog = self.unpacker.to_float(block, out=analog)
+                # process samples through the queue
+                analog_ddc = self.ddc(analog, out=analog_ddc)
+                analog_fir = self.filter(analog_ddc, out=analog_fir)
+                if self.fft.enabled.get():
+                    analog_fft = self.fft(analog_fir, out=analog_fft)
+                else:
+                    analog_fft = analog_fir
+                analog_math = self.math(analog_fft, out=analog_math) # TODO: channel maths goes here
 
-            # find first segment and number of segments
-            if segments == 1:
-                first_segment = 0
-            else:
-                digital = self.unpacker.pack_markers(block, out=digital)
-                if digital is None:
-                    raise ValueError('Enable marker extraction in unpacker '
-                                     'to use auto segments.')
-                marked_segments = self.sync(digital)
-                if len(marked_segments) == 0:
-                    raise ValueError('No synchronization markers received.')
-                first_segment = marked_segments[0]
-                if (segments == 0) or (segments is None):
-                    if len(marked_segments) < 2:
-                        raise ValueError('Need at least two synchronization '
-                                         'markers to determine the number of '
-                                         'segments.')
-                    segments = marked_segments[1] - marked_segments[0]
-            if np.prod(analog.shape[:-2]) < segments:
-                raise ValueError('Each input block must contain at least '
-                                 '`segments` ({}) segments.'.format(segments))
-            # truncate & reshape to (iteration, segment, sample, channel)
-            repetitions = analog.shape[0] // segments
-            analog_trunc = (analog_math[:repetitions*segments,...]
-                            .reshape((repetitions, segments)+analog_math.shape[1:]))
-
-            # nn classification
-            print(net.training)
-            converted_data = adjust_m4i_data(analog_trunc.get())
-            net.eval()
-            # convert net output to one of 0(g), 1(e), 2(f)
-            state = F.log_softmax(net(converted_data), dim=1).argmax(dim=1).detach().numpy()
-
-            analog_sum = self.sum(analog_trunc, analog_trunc.ndim-1)
-            if first_segment:
-                analog_sum = np.roll(analog_sum, -first_segment, axis=0)
-
-            if mean:
-                # yield (analog_sum / repetitions, (analog_sum / repetitions, state))[classify]
-                yield analog_sum / repetitions
-            else:
-                yield analog_sum, repetitions
+                # find first segment and number of segments
+                if segments == 1:
+                    first_segment = 0
+                else:
+                    digital = self.unpacker.pack_markers(block, out=digital)
+                    if digital is None:
+                        raise ADCProcessorGPUException('Enable marker extraction in unpacker '
+                                        'to use auto segments.')
+                    marked_segments = self.sync(digital)
+                    if len(marked_segments) == 0:
+                        raise ADCProcessorGPUException('No synchronization markers received.')
+                    first_segment = marked_segments[0]
+                    if (segments == 0) or (segments is None):
+                        if len(marked_segments) < 2:
+                            raise ADCProcessorGPUException('Need at least two synchronization '
+                                            'markers to determine the number of '
+                                            'segments.')
+                        segments = marked_segments[1] - marked_segments[0]
+                if np.prod(analog.shape[:-2]) < segments:
+                    raise ADCProcessorGPUException('Each input block must contain at least '
+                                    '`segments` ({}) segments.'.format(segments))
+                # truncate & reshape to (iteration, segment, sample, channel)
+                repetitions = analog.shape[0] // segments
+                analog_trunc = (analog_math[:repetitions*segments,...]
+                                .reshape((repetitions, segments)+analog_math.shape[1:]))
+                # print(f"HERE BRO {np.shape(analog_trunc.get())}")
+                # converted_data = adjust_m4i_data(analog_trunc.get())
+                
+                # print(net(converted_data))
+            
+                if self.singleshot():
+                    if first_segment:
+                        np.roll(analog_sum, -first_segment, axis=1)
+                    yield analog_trunc
+                else:
+                    analog_sum = self.sum(analog_trunc, analog_trunc.ndim-1)
+                    if first_segment:
+                        analog_sum = np.roll(analog_sum, -first_segment, axis=0)
+                    if mean:
+                        yield analog_sum / repetitions
+                    else:
+                        yield analog_sum, repetitions
+        except:
+            pass
+        finally:
+            # manually releases GPU Buffers.
+            for data in analog_sum, analog_trunc, digital, analog_math, analog_fft, analog_fir, analog_ddc, analog:
+                try:
+                    data.data.release()
+                except cl._cl.LogicError:
+                    pass
+                except AttributeError:
+                    pass
 
     def __call__(self, source):
         '''Processes all blocks generated by source through `generate`.
@@ -250,15 +277,22 @@ class TvModeGPU(TvMode):
         Returns:
             analog_mean: `np.ndarray`
         '''
-        repetitions_total = 0
-        analog_total = None
-        for analog_sum, repetitions in self.generate(source):
-            repetitions_total += repetitions
-            if analog_total is None:
-                analog_total = analog_sum
-            else:
-                analog_total += analog_sum
-        return analog_total / repetitions_total
+        if self.singleshot():
+            # Making a full size array with zeros and inserting data into it as it comes in.
+            final_array = np.zeros(self._singleshot_shape, dtype=np.complex128)
+            for i, analog_trunc in enumerate(self.generate(source)):
+                final_array[i*self._blocksize:(i+1)*self._blocksize] += analog_trunc.get()
+            return final_array
+        else:
+            repetitions_total = 0
+            analog_total = None
+            for analog_sum, repetitions in self.generate(source):
+                repetitions_total += repetitions
+                if analog_total is None:
+                    analog_total = analog_sum
+                else:
+                    analog_total += analog_sum
+            return analog_total / repetitions_total
 
     def math(self, array, out):
         '''Override this function to do some maths'''

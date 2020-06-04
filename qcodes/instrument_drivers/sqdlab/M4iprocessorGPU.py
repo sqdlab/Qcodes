@@ -15,11 +15,17 @@ class M4iprocessorGPU(Instrument):
 
     class DataArray(ArrayParameter):
         def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)            
+            super().__init__(*args, snapshot_value=False, **kwargs)            
             
         def get_raw(self):
-            data = self.instrument.get_data()
-            self.shape = data.shape
+            if 'singleshot' in self.name:
+                self.instrument.processor.singleshot(True)
+                data = self.instrument.get_data()
+                self.shape = (len(data), *data[0].shape)
+            else:
+                self.instrument.processor.singleshot(False)
+                data = self.instrument.get_data()
+                self.shape = data.shape
             return data
 
     class FFTArray(ArrayParameter):
@@ -118,8 +124,23 @@ class M4iprocessorGPU(Instrument):
                        Connect the sequence start trigger to X0 (X1) for channels 0 (1) of the digitizer.")
 
         self.add_parameter(
+            'sample_rate',
+            get_cmd=self._digi.sample_rate.get,
+            set_cmd=self._set_sample_rate,
+            label='Sampling rate',
+            vals=vals.Numbers())
+
+        self.add_parameter(
             'analog', self.DataArray, shape=(1,1,1),
             setpoint_names=('segment', 'sample', 'channel'), 
+            label='Analog data array returned by processor.',
+        )
+        # Makes sure that uqtools accepts this as a compatible parameter
+        self.analog.settable = False
+
+        self.add_parameter(
+            'singleshot_analog', self.DataArray, shape=(1,1,1,1),
+            setpoint_names=('iterations', 'segment', 'sample', 'channel'), 
             label='Analog data array returned by processor.',
         )
         # Makes sure that uqtools accepts this as a compatible parameter
@@ -267,6 +288,10 @@ class M4iprocessorGPU(Instrument):
 
     def _set_if_freq(self, freq):
         self.processor.ddc.intermediate_frequency.set(2*-freq/self._digi.sample_rate.get())
+    
+    def _set_sample_rate(self, rate):
+        self._digi.sample_rate.set(rate)
+        self.sample_rate.get()
 
     def get_data(self):
         '''
@@ -279,6 +304,7 @@ class M4iprocessorGPU(Instrument):
         num_of_acquisitions = self.averages.get()*max(1, self.segments.get())
         assert num_of_acquisitions >= 16, "Number of acquisitions must be greater than or equal to 16."
         max_blocksize = min(2**28//self.samples.get(), self.samples.get()*num_of_acquisitions)
+        assert self.segments.get()*self.samples.get() < max_blocksize, "The number of segments does not fit in 1 block of GPU processing. Reduce number of segments or samples."
         blocks = max(num_of_acquisitions//max_blocksize, 1)
         # WARNING DO NOT SET blocksize = 1; it needs AT to be LEAST 2!!!!!!
         blocksize = min(max_blocksize, num_of_acquisitions)
@@ -295,9 +321,15 @@ class M4iprocessorGPU(Instrument):
                 samples=self.samples.get(), 
                 blocksize=blocksize
             )
+            self.processor._singleshot_shape = (self.averages.get(),
+                                                self.segments.get(),
+                                                (self.samples.get() - len(self.fir_coeffs.get()) + self.processor.filter.decimation.get())//self.processor.filter.decimation.get(),
+                                                self.channels.get())
+            self.processor._blocksize = blocksize
             return self.processor(source)
             # return source
         except ValueError as e:
+            # self.processor.close()
             raise self.M4iprocessorGPUException('Check if the sequece start trigger is connected and is arriving after the acquisition trigger') from e
         except RuntimeError as e:
             msg = ("The card raised an exception. It may be locked. Try getting the error using "
@@ -313,23 +345,48 @@ class M4iprocessorGPU(Instrument):
 # def runme():
 #     new_digi = M4iprocessorGPU("one")
 #     new_digi.segments(1)  
-#     new_digi.averages(2**17)
-#     new_digi.samples(2**15)  
+#     new_digi.averages(2**21)
+#     new_digi.samples(2**8) 
+#     new_digi.sample_rate(100e6)
+
+#     print('Sample Rate : ', new_digi.sample_rate())
 
 #     new_digi.decimation.set(1)
-#     import uqtools as uq
+# #     import uqtools as uq
 
-#     tv = uq.ParameterMeasurement(new_digi.analog, data_save=True)
-#     tv_sample_av = uq.Integrate(tv, 'sample', average=True)
-#     tv_segment_av = uq.Integrate(tv, 'segment', average=True)
-#     tv_channel_av = uq.Integrate(tv, 'channel', average=True)
+# #     tv = uq.ParameterMeasurement(new_digi.analog, data_save=True)
+# #     tv_sample_av = uq.Integrate(tv, 'sample', average=True)
+# #     tv_segment_av = uq.Integrate(tv, 'segment', average=True)
+# #     tv_channel_av = uq.Integrate(tv, 'channel', average=True)
 
-#     print("Ithee bro")
-#     data = new_digi.get_data()
-#     # print(data)
-#     # print(type(data[0]))
-#     # print(data.shape)
-#     # new_digi.manual_close()
+# #     print("Ithee bro")
+#     # data = new_digi.get_data()
+#     data = np.array(new_digi.singleshot_analog())
+#     # data = np.array(new_digi.analog())
+#     input("Enter")
+#     # del data
+#     # import gc
+#     # gc.collect()
+#     input("Enget")
+#     new_digi.segments(1)  
+#     new_digi.averages(2**6)
+#     new_digi.samples(2**12)  
+
+#     new_digi.decimation.set(1)
+#     data = np.array(new_digi.singleshot_analog())
+#     # data = np.array(new_digi.analog())
+#     input("Enter to call gc")
+#     import gc
+#     gc.collect()
+#     input("Please press ctrl-C")
+#     # del data
+#     # data = np.array(new_digi.analog())
+#     data = np.array(new_digi.singleshot_analog())
+#     print(data.shape)
+# #     # print(data)
+# #     # print(type(data[0]))
+# #     # print(data.shape)
+# #     # new_digi.manual_close()
 
 # if __name__ == '__main__':
 #     runme()

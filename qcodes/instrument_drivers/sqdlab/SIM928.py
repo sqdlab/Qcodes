@@ -527,6 +527,9 @@ class SIM928_PLX_Proxy(Instrument):
         time.sleep(100e-3)
         msg = 'GETN? {},128'.format(i)
         msg = self.ask(msg)
+
+        if type(msg) == bytes:
+            msg = msg.decode(encoding = 'utf-8')
         # first read consumes the terminator of the message from the submodule,
         # so we have a terminator from the message to us still in the input
         # buffer.
@@ -554,7 +557,7 @@ class SIM928_PLX_Proxy(Instrument):
             i = self.module_nr[i]
         self.write('SNDT {},"{}"'.format(i, cmd))
 
-     def get_step(self) -> float:
+    def get_step(self) -> float:
         """
         Get the output voltage of a module.
 
