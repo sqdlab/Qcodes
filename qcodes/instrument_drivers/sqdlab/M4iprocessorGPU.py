@@ -344,14 +344,11 @@ class M4iprocessorGPU(Instrument):
 
 # def runme():
 #     new_digi = M4iprocessorGPU("one")
-#     new_digi.segments(1)  
-#     new_digi.averages(2**21)
+#     new_digi.segments(2)  
+#     new_digi.averages(2**10)
 #     new_digi.samples(2**8) 
-#     new_digi.sample_rate(100e6)
+#     # new_digi.sample_rate(100e6)
 
-#     print('Sample Rate : ', new_digi.sample_rate())
-
-#     new_digi.decimation.set(1)
 # #     import uqtools as uq
 
 # #     tv = uq.ParameterMeasurement(new_digi.analog, data_save=True)
@@ -361,32 +358,9 @@ class M4iprocessorGPU(Instrument):
 
 # #     print("Ithee bro")
 #     # data = new_digi.get_data()
-#     data = np.array(new_digi.singleshot_analog())
+#     data = np.array(new_digi.analog())
 #     # data = np.array(new_digi.analog())
-#     input("Enter")
-#     # del data
-#     # import gc
-#     # gc.collect()
-#     input("Enget")
-#     new_digi.segments(1)  
-#     new_digi.averages(2**6)
-#     new_digi.samples(2**12)  
-
-#     new_digi.decimation.set(1)
-#     data = np.array(new_digi.singleshot_analog())
-#     # data = np.array(new_digi.analog())
-#     input("Enter to call gc")
-#     import gc
-#     gc.collect()
-#     input("Please press ctrl-C")
-#     # del data
-#     # data = np.array(new_digi.analog())
-#     data = np.array(new_digi.singleshot_analog())
 #     print(data.shape)
-# #     # print(data)
-# #     # print(type(data[0]))
-# #     # print(data.shape)
-# #     # new_digi.manual_close()
 
 # if __name__ == '__main__':
 #     runme()
