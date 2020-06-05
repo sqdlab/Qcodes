@@ -8,6 +8,7 @@ from qcodes.instrument_drivers.Spectrum.M4i import M4i
 import qcodes.instrument_drivers.Spectrum.pyspcm as spcm
 from qcodes.instrument.base import Instrument
 import qcodes
+import gc
 
 class M4iprocessorGPU(Instrument):
     class M4iprocessorGPUException(Exception):
@@ -15,7 +16,8 @@ class M4iprocessorGPU(Instrument):
 
     class DataArray(ArrayParameter):
         def __init__(self, *args, **kwargs):
-            super().__init__(*args, snapshot_value=False, **kwargs)            
+            super().__init__(*args, snapshot_value=False, **kwargs)
+            self.get = self.get_raw       
             
         def get_raw(self):
             if 'singleshot' in self.name:
@@ -26,7 +28,8 @@ class M4iprocessorGPU(Instrument):
                 self.instrument.processor.singleshot(False)
                 data = self.instrument.get_data()
                 self.shape = data.shape
-            return data
+            gc.collect()
+            return data            
 
     class FFTArray(ArrayParameter):
         def __init__(self, *args, **kwargs):
@@ -345,8 +348,8 @@ class M4iprocessorGPU(Instrument):
 # def runme():
 #     new_digi = M4iprocessorGPU("one")
 #     new_digi.segments(2)  
-#     new_digi.averages(2**10)
-#     new_digi.samples(2**8) 
+#     new_digi.averages(2**18)
+#     new_digi.samples(2**12) 
 #     # new_digi.sample_rate(100e6)
 
 # #     import uqtools as uq

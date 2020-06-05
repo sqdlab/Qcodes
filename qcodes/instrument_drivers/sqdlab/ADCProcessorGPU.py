@@ -198,74 +198,60 @@ class TvModeGPU(TvMode):
                         pass
 
         segments = self.segments()
-        try:
 
-            for block in source:
-                # separate analog and digital data
-                # analog, digital = self.unpacker(block, out=(analog, digital))
-                analog = self.unpacker.to_float(block, out=analog)
-                # process samples through the queue
-                analog_ddc = self.ddc(analog, out=analog_ddc)
-                analog_fir = self.filter(analog_ddc, out=analog_fir)
-                if self.fft.enabled.get():
-                    analog_fft = self.fft(analog_fir, out=analog_fft)
-                else:
-                    analog_fft = analog_fir
-                analog_math = self.math(analog_fft, out=analog_math) # TODO: channel maths goes here
+        for block in source:
+            # separate analog and digital data
+            # analog, digital = self.unpacker(block, out=(analog, digital))
+            analog = self.unpacker.to_float(block, out=analog)
+            # process samples through the queue
+            analog_ddc = self.ddc(analog, out=analog_ddc)
+            analog_fir = self.filter(analog_ddc, out=analog_fir)
+            if self.fft.enabled.get():
+                analog_fft = self.fft(analog_fir, out=analog_fft)
+            else:
+                analog_fft = analog_fir
+            analog_math = self.math(analog_fft, out=analog_math) # TODO: channel maths goes here
 
-                # find first segment and number of segments
-                if segments == 1:
-                    first_segment = 0
+            # find first segment and number of segments
+            if segments == 1:
+                first_segment = 0
+            else:
+                digital = self.unpacker.pack_markers(block, out=digital)
+                if digital is None:
+                    raise ADCProcessorGPUException('Enable marker extraction in unpacker '
+                                    'to use auto segments.')
+                marked_segments = self.sync(digital)
+                if len(marked_segments) == 0:
+                    raise ADCProcessorGPUException('No synchronization markers received.')
+                first_segment = marked_segments[0]
+                if (segments == 0) or (segments is None):
+                    if len(marked_segments) < 2:
+                        raise ADCProcessorGPUException('Need at least two synchronization '
+                                        'markers to determine the number of '
+                                        'segments.')
+                    segments = marked_segments[1] - marked_segments[0]
+            if np.prod(analog.shape[:-2]) < segments:
+                raise ADCProcessorGPUException('Each input block must contain at least '
+                                '`segments` ({}) segments.'.format(segments))
+            # truncate & reshape to (iteration, segment, sample, channel)
+            repetitions = analog.shape[0] // segments
+            analog_trunc = (analog_math[:repetitions*segments,...]
+                            .reshape((repetitions, segments)+analog_math.shape[1:]))
+        
+            if self.singleshot():
+                analog_trunc_np = analog_trunc.get()
+                if first_segment:
+                    analog_trunc_np = np.roll(analog_trunc_np, -first_segment, axis=1)
+                yield analog_trunc_np
+            else:
+                analog_sum = self.sum(analog_trunc, analog_trunc.ndim-1)
+                if first_segment:
+                    analog_sum = np.roll(analog_sum, -first_segment, axis=0)
+                if mean:
+                    yield analog_sum / repetitions
                 else:
-                    digital = self.unpacker.pack_markers(block, out=digital)
-                    if digital is None:
-                        raise ADCProcessorGPUException('Enable marker extraction in unpacker '
-                                        'to use auto segments.')
-                    marked_segments = self.sync(digital)
-                    if len(marked_segments) == 0:
-                        raise ADCProcessorGPUException('No synchronization markers received.')
-                    first_segment = marked_segments[0]
-                    if (segments == 0) or (segments is None):
-                        if len(marked_segments) < 2:
-                            raise ADCProcessorGPUException('Need at least two synchronization '
-                                            'markers to determine the number of '
-                                            'segments.')
-                        segments = marked_segments[1] - marked_segments[0]
-                if np.prod(analog.shape[:-2]) < segments:
-                    raise ADCProcessorGPUException('Each input block must contain at least '
-                                    '`segments` ({}) segments.'.format(segments))
-                # truncate & reshape to (iteration, segment, sample, channel)
-                repetitions = analog.shape[0] // segments
-                analog_trunc = (analog_math[:repetitions*segments,...]
-                                .reshape((repetitions, segments)+analog_math.shape[1:]))
-            
-                if self.singleshot():
-                    analog_trunc_np = analog_trunc.get()
-                    if first_segment:
-                        analog_trunc_np = np.roll(analog_trunc_np, -first_segment, axis=1)
-                    yield analog_trunc_np
-                else:
-                    analog_sum = self.sum(analog_trunc, analog_trunc.ndim-1)
-                    if first_segment:
-                        analog_sum = np.roll(analog_sum, -first_segment, axis=0)
-                    if mean:
-                        yield analog_sum / repetitions
-                    else:
-                        yield analog_sum, repetitions
-        except Exception as e:
-            raise e
-        finally:
-            # manually releases GPU Buffers.
-            try:
-                for data in digital, analog_math, analog_fft, analog_fir, analog_ddc, analog, analog_sum, analog_trunc:
-                    try:
-                        data.data.release()
-                    except cl._cl.LogicError:
-                        pass
-                    except AttributeError:
-                        pass
-            except UnboundLocalError:
-                pass
+                    yield analog_sum, repetitions
+
 
     def __call__(self, source):
         '''Processes all blocks generated by source through `generate`.
