@@ -2,8 +2,8 @@ import scipy
 import logging
 import numpy as np
 from qcodes import validators as vals, ManualParameter, ArrayParameter
-from .ADCProcessorGPU import TvModeGPU
-# from qcodes.instrument_drivers.sqdlab.ADCProcessorGPU import TvModeGPU
+# from .ADCProcessorGPU import TvModeGPU
+from qcodes.instrument_drivers.sqdlab.ADCProcessorGPU import TvModeGPU
 from qcodes.instrument_drivers.Spectrum.M4i import M4i
 import qcodes.instrument_drivers.Spectrum.pyspcm as spcm
 from qcodes.instrument.base import Instrument
@@ -22,8 +22,12 @@ class M4iprocessorGPU(Instrument):
         def get_raw(self):
             if 'singleshot' in self.name:
                 self.instrument.processor.singleshot(True)
+                if 'time_integrat' in self.name:
+                    self.instrument.processor.enable_time_integration(True)
+                else:
+                    self.instrument.processor.enable_time_integration(False)
                 data = self.instrument.get_data()
-                self.shape = (len(data), *data[0].shape)
+                self.shape = data.shape
             else:
                 self.instrument.processor.singleshot(False)
                 data = self.instrument.get_data()
@@ -147,7 +151,15 @@ class M4iprocessorGPU(Instrument):
             label='Analog data array returned by processor.',
         )
         # Makes sure that uqtools accepts this as a compatible parameter
-        self.analog.settable = False
+        self.singleshot_analog.settable = False
+
+        self.add_parameter(
+            'time_integrated_singleshot_analog', self.DataArray, shape=(1,1,1),
+            setpoint_names=('iterations', 'segment', 'channel'), 
+            label='Analog data array returned by processor.',
+        )
+        # Makes sure that uqtools accepts this as a compatible parameter
+        self.time_integrated_singleshot_analog.settable = False
 
         self.add_parameter(
             'fft', self.FFTArray, shape=(1,1,1),
@@ -345,25 +357,28 @@ class M4iprocessorGPU(Instrument):
         self.processor.close()
         
 
-# def runme():
-#     new_digi = M4iprocessorGPU("one")
-#     new_digi.segments(2)  
-#     new_digi.averages(2**18)
-#     new_digi.samples(2**12) 
-#     # new_digi.sample_rate(100e6)
+def runme():
+    new_digi = M4iprocessorGPU("one")
+    new_digi.segments(1)  
+    new_digi.averages(2**18)
+    new_digi.samples(2**12) 
+    # new_digi.sample_rate(100e6)
 
-# #     import uqtools as uq
+#     import uqtools as uq
 
-# #     tv = uq.ParameterMeasurement(new_digi.analog, data_save=True)
-# #     tv_sample_av = uq.Integrate(tv, 'sample', average=True)
-# #     tv_segment_av = uq.Integrate(tv, 'segment', average=True)
-# #     tv_channel_av = uq.Integrate(tv, 'channel', average=True)
+#     tv = uq.ParameterMeasurement(new_digi.analog, data_save=True)
+#     tv_sample_av = uq.Integrate(tv, 'sample', average=True)
+#     tv_segment_av = uq.Integrate(tv, 'segment', average=True)
+#     tv_channel_av = uq.Integrate(tv, 'channel', average=True)
 
-# #     print("Ithee bro")
-#     # data = new_digi.get_data()
-#     data = np.array(new_digi.analog())
-#     # data = np.array(new_digi.analog())
-#     print(data.shape)
+#     print("Ithee bro")
+    # data = new_digi.get_data()
+    data = np.array(new_digi.singleshot_analog())
+    print(data.shape)
+    data = np.array(new_digi.time_integrated_singleshot_analog())
+    print(data.shape)
+    # data = np.array(new_digi.analog())
+    print(data.shape)
 
-# if __name__ == '__main__':
-#     runme()
+if __name__ == '__main__':
+    runme()
