@@ -147,7 +147,7 @@ class M4iprocessorGPU(Instrument):
             label='Analog data array returned by processor.',
         )
         # Makes sure that uqtools accepts this as a compatible parameter
-        self.analog.settable = False
+        self.singleshot_analog.settable = False
 
         self.add_parameter(
             'fft', self.FFTArray, shape=(1,1,1),
