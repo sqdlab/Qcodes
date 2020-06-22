@@ -151,8 +151,6 @@ class M4iprocessorGPU(Instrument):
         )
         # Makes sure that uqtools accepts this as a compatible parameter
         self.singleshot_analog.settable = False
-<<<<<<< HEAD
-=======
 
         self.add_parameter(
             'time_integrated_singleshot_analog', self.DataArray, shape=(1,1,1),
@@ -161,7 +159,6 @@ class M4iprocessorGPU(Instrument):
         )
         # Makes sure that uqtools accepts this as a compatible parameter
         self.time_integrated_singleshot_analog.settable = False
->>>>>>> feature/time_integration
 
         self.add_parameter(
             'fft', self.FFTArray, shape=(1,1,1),
