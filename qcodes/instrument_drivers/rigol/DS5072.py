@@ -156,7 +156,7 @@ class RigolDS5072Channel(InstrumentChannel):
                             vals=vals.Enum('ON','OFF')
                             )
 
-    def _set_channel_state(self,state):
+    def _set_channel_state(self,,channel_number,state):
         print(f":OUTP{self.channel}:STAT{state}")
         # self.write(f":OUTP{self.channel}:STAT")
 
@@ -261,7 +261,6 @@ class DS4000(VisaInstrument):
         for channel_number in range(1, 3):
             channel = RigolDS5072Channel(self, "ch{}".format(channel_number), channel_number)
             channels.append(channel)
-
 
         channels.lock()
         self.add_submodule('channels', channels)

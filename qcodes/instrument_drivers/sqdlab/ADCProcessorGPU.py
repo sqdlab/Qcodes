@@ -11,6 +11,12 @@ from .ADCProcessor import (
 )
 from . import dsp
 
+# from qcodes.instrument_drivers.sqdlab.ADCProcessor import (
+#     Unpacker, DigitalDownconversion, Filter, Mean, Synchronizer, TvMode, 
+#     Instrument, ManualParameter, vals
+# )
+# from qcodes.instrument_drivers.sqdlab import dsp
+
 def get_cl_context():
     '''get an opencl context for a gpu device'''
     for platform in cl.get_platforms():
@@ -106,6 +112,16 @@ class MeanGPU(Mean):
     def __call__(self, data, ndim, out=None):
         return self.mean(self.parent.gpu_queue, data, ndim=ndim, out=out).get()
 
+class TimeIntegrateGPU(Mean):
+    def __init__(self, *args, start=0, stop=-1, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.time_integrate = dsp.TimeIntegrate(self.parent.gpu_context)
+        self.start = start
+        self.stop = stop
+
+    def __call__(self, data, out=None):
+        return self.time_integrate(self.parent.gpu_queue, data, out=out, start=self.start, stop=self.stop)
+
 class SumGPU(Mean):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -131,6 +147,9 @@ class TvModeGPU(TvMode):
         self.add_parameter('singleshot', ManualParameter, 
                            vals=vals.Bool(), initial_value=False)
         
+        self.add_parameter('enable_time_integration', ManualParameter, 
+                           vals=vals.Bool(), initial_value=False)
+        
         self.add_parameter('segments', ManualParameter, 
                            label='Number of segments. Zero for automatic.', 
                            vals=vals.Numbers(min_value=0), default_value=0)
@@ -143,6 +162,7 @@ class TvModeGPU(TvMode):
         self.add_submodule('sync', Synchronizer(self, 'sync'))
         #self.add_submodule('mean', MeanGPU(self, 'mean'))
         self.add_submodule('sum', SumGPU(self, 'sum'))
+        self.add_submodule('time_integrate', TimeIntegrateGPU(self, 'time_integrate'))
         self.connect_message()
 
     def generate(self, source, mean=False, classify=False):
@@ -239,7 +259,11 @@ class TvModeGPU(TvMode):
                             .reshape((repetitions, segments)+analog_math.shape[1:]))
         
             if self.singleshot():
-                analog_trunc_np = analog_trunc.get()
+                if self.enable_time_integration():
+                    analog_time_integrate = self.time_integrate(analog_trunc)
+                else:
+                    analog_time_integrate = analog_trunc.get()
+                analog_trunc_np = analog_time_integrate
                 if first_segment:
                     analog_trunc_np = np.roll(analog_trunc_np, -first_segment, axis=1)
                 yield analog_trunc_np
@@ -263,12 +287,20 @@ class TvModeGPU(TvMode):
             analog_mean: `np.ndarray`
         '''
         if self.singleshot():
-            # Making a full size array with zeros and inserting data into it as it comes in.
-            final_array = np.zeros(self._singleshot_shape, dtype=np.complex128)
-            iterations_per_block = self._blocksize//self._singleshot_shape[1]
-            for i, analog_trunc in enumerate(self.generate(source)):
-                final_array[i*iterations_per_block:(i+1)*iterations_per_block] += analog_trunc
-            return final_array
+            if self.enable_time_integration():
+                # Making a full size array with zeros and inserting data into it as it comes in.
+                final_array = np.zeros(self._singleshot_shape[:2]+self._singleshot_shape[-1:], dtype=np.complex128)
+                iterations_per_block = self._blocksize//self._singleshot_shape[1]
+                for i, analog_trunc in enumerate(self.generate(source)):
+                    final_array[i*iterations_per_block:(i+1)*iterations_per_block] += analog_trunc
+                return final_array
+            else:
+                # Making a full size array with zeros and inserting data into it as it comes in.
+                final_array = np.zeros(self._singleshot_shape, dtype=np.complex128)
+                iterations_per_block = self._blocksize//self._singleshot_shape[1]
+                for i, analog_trunc in enumerate(self.generate(source)):
+                    final_array[i*iterations_per_block:(i+1)*iterations_per_block] += analog_trunc
+                return final_array
         else:
             repetitions_total = 0
             analog_total = None
@@ -283,3 +315,8 @@ class TvModeGPU(TvMode):
     def math(self, array, out):
         '''Override this function to do some maths'''
         return array
+
+# if __name__ == "__main__":
+#     import os
+#     print(os.getcwd())
+#     tvmode = TvModeGPU('tvmode')

@@ -2,6 +2,10 @@ import scipy
 import logging
 import numpy as np
 from qcodes import validators as vals, ManualParameter, ArrayParameter
+<<<<<<< HEAD
+=======
+# from .ADCProcessorGPU import TvModeGPU
+>>>>>>> feature/time_integration
 from qcodes.instrument_drivers.sqdlab.ADCProcessorGPU import TvModeGPU
 from qcodes.instrument_drivers.Spectrum.M4i import M4i
 import qcodes.instrument_drivers.Spectrum.pyspcm as spcm
@@ -21,8 +25,12 @@ class M4iprocessorGPU(Instrument):
         def get_raw(self):
             if 'singleshot' in self.name:
                 self.instrument.processor.singleshot(True)
+                if 'time_integrat' in self.name:
+                    self.instrument.processor.enable_time_integration(True)
+                else:
+                    self.instrument.processor.enable_time_integration(False)
                 data = self.instrument.get_data()
-                self.shape = (len(data), *data[0].shape)
+                self.shape = data.shape
             else:
                 self.instrument.processor.singleshot(False)
                 data = self.instrument.get_data()
@@ -147,6 +155,17 @@ class M4iprocessorGPU(Instrument):
         )
         # Makes sure that uqtools accepts this as a compatible parameter
         self.singleshot_analog.settable = False
+<<<<<<< HEAD
+=======
+
+        self.add_parameter(
+            'time_integrated_singleshot_analog', self.DataArray, shape=(1,1,1),
+            setpoint_names=('iterations', 'segment', 'channel'), 
+            label='Analog data array returned by processor.',
+        )
+        # Makes sure that uqtools accepts this as a compatible parameter
+        self.time_integrated_singleshot_analog.settable = False
+>>>>>>> feature/time_integration
 
         self.add_parameter(
             'fft', self.FFTArray, shape=(1,1,1),
@@ -346,8 +365,8 @@ class M4iprocessorGPU(Instrument):
 
 # def runme():
 #     new_digi = M4iprocessorGPU("one")
-#     new_digi.segments(4)  
-#     new_digi.averages(512*16*32)
+#     new_digi.segments(5)  
+#     new_digi.averages(2**10)
 #     new_digi.samples(512) 
 #     # new_digi.sample_rate(100e6)
 
@@ -369,7 +388,19 @@ class M4iprocessorGPU(Instrument):
 
 # #     print("Ithee bro")
 #     # data = new_digi.get_data()
-#     # data = np.array(new_digi.analog())
+#     import time
+#     starttime = time.time()
+#     data = new_digi.singleshot_analog()
+#     print(time.time()-starttime)
+#     print(data.shape)
+#     starttime = time.time()
+#     new_digi.processor.time_integrate.start=100
+#     new_digi.processor.time_integrate.stop=101
+#     data = new_digi.time_integrated_singleshot_analog()
+#     print(time.time()-starttime)
+#     print(data.shape)
+#     # data = np.array(new_digi.time_integrated_singleshot_analog())
+#     # print(data.shape)
 #     # data = np.array(new_digi.analog())
 #     # print(data.shape)
 

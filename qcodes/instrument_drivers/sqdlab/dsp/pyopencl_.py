@@ -694,3 +694,115 @@ class Sum(object):
         kernel = getattr(self.prg, 'sum_{}_{}'.format(self._out_ctype, self._in_ctype))
         kernel(cq, (stride,), None, out.data, in1.data, np.uint32(count))
         return out
+
+
+class TimeIntegrate(object):
+    code = """
+    // kernel for one channel
+    __kernel void time_integrate_${otype}_${itype}_1(
+        global ${otype} *output, 
+        global ${itype} *input,
+        unsigned int start,
+        unsigned int stop
+    ) {
+        size_t idx = get_global_id(0);
+        size_t sizex = get_global_size(0);
+
+        size_t samples = get_global_size(1);
+
+        ${otype} channel1_data = 0;
+        for(int i = start; i < stop; i++)
+        {
+            channel1_data = channel1_data + convert_${otype}(input[idx*samples + i]);
+        }
+        output[idx] = channel1_data;
+    }
+        // kernel for two channel
+        __kernel void time_integrate_${otype}_${itype}_2(
+        global ${otype} *output, 
+        global ${itype} *input,
+        unsigned int start,
+        unsigned int stop
+    ) {
+        size_t idx = get_global_id(0);
+        size_t sizex = get_global_size(0);
+
+        size_t samples = get_global_size(1);
+
+        ${otype} channel1_data = 0;
+        ${otype} channel2_data = 0;
+        
+        for(int i = start; i < stop*2; i = i+2)
+        {
+            channel1_data = channel1_data + convert_${otype}(input[idx*samples*2 + i]);
+            channel2_data = channel2_data + convert_${otype}(input[idx*samples*2 + i + 1]);
+        }   
+        output[2*idx] = channel1_data;
+        output[2*idx+1] = channel2_data;    
+    }    
+    """
+
+    # No float3 because of alignment issues
+    types = ()
+    ftypes = {1:'float', 2:'float2', 4:'float4', 8:'float8', 16:'float16'}
+    dtypes = {1:'double', 2:'double2', 4:'double4', 8:'double8', 16:'double16'}
+
+    def __init__(self, context):
+        code = ''
+        for otype, itype in [('float', 'float'), ('double', 'float'), 
+                            ('double', 'double')]:
+            for width in ['', '2']:
+                render_kws = dict(otype=otype+width, itype=itype+width)
+                code += Template(self.code).render(**render_kws)
+        self.prg = cl.Program(context, code).build()
+
+    def __call__(self, cq, in1, out=None, start=0, stop=-1):
+        '''
+        Calculate the mean over the the third dimension of `in1`. If
+
+        Input
+        -----
+        cq: `cl.CommandQueue`
+            OpenCL command queue the operation is performed in. 
+        in1: cl.Array or np.ndarray, dtype=complex64
+            Data array.
+        out: `cl.Array`, optional
+            Output array. If unset, a new `cl.Array` is allocated.
+        
+        Returns
+        -------
+        out: cl.Array, dtype=complex64
+            in1.mean(axis=2)
+        '''
+        # check input(s)
+        typemap = {np.float32: 'float', np.complex64: 'float2',
+                   np.float64: 'double', np.complex128: 'double2'}
+        for dtype, ctype in typemap.items():
+            if in1.dtype == dtype:
+                break
+        original_shape = in1.shape
+        out_shape = (np.prod(in1.shape[:-2]), in1.shape[-1])
+        samples = in1.shape[-2]
+        channels = in1.shape[-1]
+        # Reshapes the input array to 2 dimensions. Everything but iterations is flattenned.
+        in1 = in1.reshape(np.prod(in1.shape[:-2]),in1.shape[-2]*in1.shape[-1])
+        if isinstance(in1, np.ndarray):
+            in1 = cl.array.to_device(cq, in1, async=True)
+        # else:
+        #     raise TypeError('dtype of in1 is not supported.')
+        # check output(s)
+        # removes the second last
+        if out is None:
+            out = cl.array.Array(cq, out_shape, in1.dtype)
+        else:
+            if (out.dtype != in1.dtype) or (out.shape != out_shape):
+                raise ValueError('out must have dtype={} and shape={}'
+                                 .format(in1.dtype, out_shape))
+        # run computation
+        #print (out_shape, stride, count)
+        kernel = getattr(self.prg, 'time_integrate_{}_{}_{}'.format(ctype, ctype, channels))
+        start = start%samples
+        stop = stop%samples
+        assert stop > start, "Must integrate a natural number of points."
+        kernel(cq, (out_shape[0], samples), None, out.data, in1.data, np.uint32(), np.uint32(stop%samples + 1))
+        return out.get().reshape(np.delete(original_shape, -2))
