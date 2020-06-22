@@ -265,8 +265,9 @@ class TvModeGPU(TvMode):
         if self.singleshot():
             # Making a full size array with zeros and inserting data into it as it comes in.
             final_array = np.zeros(self._singleshot_shape, dtype=np.complex128)
+            iterations_per_block = self._blocksize//self._singleshot_shape[1]
             for i, analog_trunc in enumerate(self.generate(source)):
-                final_array[i*self._blocksize:(i+1)*self._blocksize] += analog_trunc
+                final_array[i*iterations_per_block:(i+1)*iterations_per_block] += analog_trunc
             return final_array
         else:
             repetitions_total = 0

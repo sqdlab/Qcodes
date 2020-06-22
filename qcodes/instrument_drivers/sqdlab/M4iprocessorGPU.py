@@ -2,8 +2,7 @@ import scipy
 import logging
 import numpy as np
 from qcodes import validators as vals, ManualParameter, ArrayParameter
-from .ADCProcessorGPU import TvModeGPU
-# from qcodes.instrument_drivers.sqdlab.ADCProcessorGPU import TvModeGPU
+from qcodes.instrument_drivers.sqdlab.ADCProcessorGPU import TvModeGPU
 from qcodes.instrument_drivers.Spectrum.M4i import M4i
 import qcodes.instrument_drivers.Spectrum.pyspcm as spcm
 from qcodes.instrument.base import Instrument
@@ -347,12 +346,21 @@ class M4iprocessorGPU(Instrument):
 
 # def runme():
 #     new_digi = M4iprocessorGPU("one")
-#     new_digi.segments(2)  
-#     new_digi.averages(2**18)
-#     new_digi.samples(2**12) 
+#     new_digi.segments(4)  
+#     new_digi.averages(512*16*32)
+#     new_digi.samples(512) 
 #     # new_digi.sample_rate(100e6)
 
-# #     import uqtools as uq
+#     import uqtools as uq
+
+#     # switch to no data files, just memory
+#     uq.config.store = 'MemoryStore'
+#     uq.config.store_kwargs = {}
+
+#     tv_ss = uq.DigiTvModeMeasurement(new_digi, singleshot=True, data_save=True)
+
+#     store = tv_ss()
+#     print(store)
 
 # #     tv = uq.ParameterMeasurement(new_digi.analog, data_save=True)
 # #     tv_sample_av = uq.Integrate(tv, 'sample', average=True)
@@ -361,9 +369,9 @@ class M4iprocessorGPU(Instrument):
 
 # #     print("Ithee bro")
 #     # data = new_digi.get_data()
-#     data = np.array(new_digi.analog())
 #     # data = np.array(new_digi.analog())
-#     print(data.shape)
+#     # data = np.array(new_digi.analog())
+#     # print(data.shape)
 
 # if __name__ == '__main__':
 #     runme()
