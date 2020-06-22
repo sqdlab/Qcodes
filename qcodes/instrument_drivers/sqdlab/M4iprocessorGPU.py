@@ -2,10 +2,6 @@ import scipy
 import logging
 import numpy as np
 from qcodes import validators as vals, ManualParameter, ArrayParameter
-<<<<<<< HEAD
-=======
-# from .ADCProcessorGPU import TvModeGPU
->>>>>>> feature/time_integration
 from qcodes.instrument_drivers.sqdlab.ADCProcessorGPU import TvModeGPU
 from qcodes.instrument_drivers.Spectrum.M4i import M4i
 import qcodes.instrument_drivers.Spectrum.pyspcm as spcm
@@ -363,46 +359,46 @@ class M4iprocessorGPU(Instrument):
         self.processor.close()
         
 
-# def runme():
-#     new_digi = M4iprocessorGPU("one")
-#     new_digi.segments(5)  
-#     new_digi.averages(2**10)
-#     new_digi.samples(512) 
-#     # new_digi.sample_rate(100e6)
+def runme():
+    new_digi = M4iprocessorGPU("one")
+    new_digi.segments(5)  
+    new_digi.averages(2**10)
+    new_digi.samples(512) 
+    # new_digi.sample_rate(100e6)
 
-#     import uqtools as uq
+    import uqtools as uq
 
-#     # switch to no data files, just memory
-#     uq.config.store = 'MemoryStore'
-#     uq.config.store_kwargs = {}
+    # switch to no data files, just memory
+    uq.config.store = 'MemoryStore'
+    uq.config.store_kwargs = {}
 
-#     tv_ss = uq.DigiTvModeMeasurement(new_digi, singleshot=True, data_save=True)
+    tv_ss = uq.DigiTvModeMeasurement(new_digi, singleshot=True, data_save=True)
 
-#     store = tv_ss()
-#     print(store)
+    store = tv_ss()
+    print(store)
 
-# #     tv = uq.ParameterMeasurement(new_digi.analog, data_save=True)
-# #     tv_sample_av = uq.Integrate(tv, 'sample', average=True)
-# #     tv_segment_av = uq.Integrate(tv, 'segment', average=True)
-# #     tv_channel_av = uq.Integrate(tv, 'channel', average=True)
+#     tv = uq.ParameterMeasurement(new_digi.analog, data_save=True)
+#     tv_sample_av = uq.Integrate(tv, 'sample', average=True)
+#     tv_segment_av = uq.Integrate(tv, 'segment', average=True)
+#     tv_channel_av = uq.Integrate(tv, 'channel', average=True)
 
-# #     print("Ithee bro")
-#     # data = new_digi.get_data()
-#     import time
-#     starttime = time.time()
-#     data = new_digi.singleshot_analog()
-#     print(time.time()-starttime)
-#     print(data.shape)
-#     starttime = time.time()
-#     new_digi.processor.time_integrate.start=100
-#     new_digi.processor.time_integrate.stop=101
-#     data = new_digi.time_integrated_singleshot_analog()
-#     print(time.time()-starttime)
-#     print(data.shape)
-#     # data = np.array(new_digi.time_integrated_singleshot_analog())
-#     # print(data.shape)
-#     # data = np.array(new_digi.analog())
-#     # print(data.shape)
+#     print("Ithee bro")
+    # data = new_digi.get_data()
+    import time
+    starttime = time.time()
+    data = new_digi.singleshot_analog()
+    print(time.time()-starttime)
+    print(data.shape)
+    # starttime = time.time()
+    # new_digi.processor.time_integrate.start=100
+    # new_digi.processor.time_integrate.stop=101
+    # data = new_digi.time_integrated_singleshot_analog()
+    # print(time.time()-starttime)
+    # print(data.shape)
+    # data = np.array(new_digi.time_integrated_singleshot_analog())
+    # print(data.shape)
+    # data = np.array(new_digi.analog())
+    # print(data.shape)
 
-# if __name__ == '__main__':
-#     runme()
+if __name__ == '__main__':
+    runme()
