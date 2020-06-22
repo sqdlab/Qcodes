@@ -698,27 +698,47 @@ class Sum(object):
 
 class TimeIntegrate(object):
     code = """
-    __kernel void time_integrate_${otype}_${itype}(
+    // kernel for one channel
+    __kernel void time_integrate_${otype}_${itype}_1(
         global ${otype} *output, 
         global ${itype} *input,
-        // number of samples per acquisition
-        const unsigned int count,
-        // whether or not to divide by number of samples
-        const unsigned int mean
+        unsigned int start,
+        unsigned int stop
     ) {
-        // sum over third axis of a two-dimensional array
-        size_t channels=get_global_size(0);
-        size_t acquisition=count*channels*get_global_id(0);
+        size_t idx = get_global_id(0);
+        size_t sizex = get_global_size(0);
 
-        ${otype} sum = 0.;
-        for(size_t idx = acquisition; idx < count; idx += channels) {
-            sum += convert_${otype}(input[idx]);
+        size_t samples = get_global_size(1);
+
+        ${otype} channel1_data = 0;
+        for(int i = start; i < stop; i++)
+        {
+            channel1_data = channel1_data + convert_${otype}(input[idx*samples + i]);
         }
-        if(mean) {
-            output[acquisition] = sum / convert_float(count);
-        } else {
-            output[acquisition] = sum;
-        }
+        output[idx] = channel1_data;
+    }
+        // kernel for two channel
+        __kernel void time_integrate_${otype}_${itype}_2(
+        global ${otype} *output, 
+        global ${itype} *input,
+        unsigned int start,
+        unsigned int stop
+    ) {
+        size_t idx = get_global_id(0);
+        size_t sizex = get_global_size(0);
+
+        size_t samples = get_global_size(1);
+
+        ${otype} channel1_data = 0;
+        ${otype} channel2_data = 0;
+        
+        for(int i = start; i < stop*2; i = i+2)
+        {
+            channel1_data = channel1_data + convert_${otype}(input[idx*samples*2 + i]);
+            channel2_data = channel2_data + convert_${otype}(input[idx*samples*2 + i + 1]);
+        }   
+        output[2*idx] = channel1_data;
+        output[2*idx+1] = channel2_data;    
     }    
     """
 
@@ -730,13 +750,13 @@ class TimeIntegrate(object):
     def __init__(self, context):
         code = ''
         for otype, itype in [('float', 'float'), ('double', 'float'), 
-                             ('double', 'double')]:
+                            ('double', 'double')]:
             for width in ['', '2']:
                 render_kws = dict(otype=otype+width, itype=itype+width)
                 code += Template(self.code).render(**render_kws)
         self.prg = cl.Program(context, code).build()
 
-    def __call__(self, cq, in1, mean=True, out=None):
+    def __call__(self, cq, in1, out=None, start=0, stop=-1):
         '''
         Calculate the mean over the the third dimension of `in1`. If
 
@@ -760,13 +780,18 @@ class TimeIntegrate(object):
         for dtype, ctype in typemap.items():
             if in1.dtype == dtype:
                 break
-        else:
-            raise TypeError('dtype of in1 is not supported.')
+        original_shape = in1.shape
+        out_shape = (np.prod(in1.shape[:-2]), in1.shape[-1])
+        samples = in1.shape[-2]
+        channels = in1.shape[-1]
+        # Reshapes the input array to 2 dimensions. Everything but iterations is flattenned.
+        in1 = in1.reshape(np.prod(in1.shape[:-2]),in1.shape[-2]*in1.shape[-1])
         if isinstance(in1, np.ndarray):
             in1 = cl.array.to_device(cq, in1, async=True)
+        # else:
+        #     raise TypeError('dtype of in1 is not supported.')
         # check output(s)
         # removes the second last
-        out_shape = in1.shape[:2]+in1.shape[-1:]
         if out is None:
             out = cl.array.Array(cq, out_shape, in1.dtype)
         else:
@@ -774,10 +799,10 @@ class TimeIntegrate(object):
                 raise ValueError('out must have dtype={} and shape={}'
                                  .format(in1.dtype, out_shape))
         # run computation
-        count = in1.shape[2]
-        channels = in1.shape[-1]
         #print (out_shape, stride, count)
-        kernel = getattr(self.prg, 'time_integrate_{}_{}'.format(ctype, ctype))
-        kernel(cq, (channels,), None, out.data, in1.data, np.uint32(count), 
-               np.uint32(mean))
-        return out
+        kernel = getattr(self.prg, 'time_integrate_{}_{}_{}'.format(ctype, ctype, channels))
+        start = start%samples
+        stop = stop%samples
+        assert stop > start, "Must integrate a natural number of points."
+        kernel(cq, (out_shape[0], samples), None, out.data, in1.data, np.uint32(), np.uint32(stop%samples + 1))
+        return out.get().reshape(np.delete(original_shape, -2))

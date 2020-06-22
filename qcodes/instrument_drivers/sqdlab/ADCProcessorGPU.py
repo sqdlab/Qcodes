@@ -113,13 +113,14 @@ class MeanGPU(Mean):
         return self.mean(self.parent.gpu_queue, data, ndim=ndim, out=out).get()
 
 class TimeIntegrateGPU(Mean):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, start=0, stop=-1, **kwargs):
         super().__init__(*args, **kwargs)
         self.time_integrate = dsp.TimeIntegrate(self.parent.gpu_context)
+        self.start = start
+        self.stop = stop
 
     def __call__(self, data, out=None):
-        return self.time_integrate(self.parent.gpu_queue, data, out=out).get()
-
+        return self.time_integrate(self.parent.gpu_queue, data, out=out, start=self.start, stop=self.stop)
 
 class SumGPU(Mean):
     def __init__(self, *args, **kwargs):

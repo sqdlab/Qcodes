@@ -357,28 +357,37 @@ class M4iprocessorGPU(Instrument):
         self.processor.close()
         
 
-def runme():
-    new_digi = M4iprocessorGPU("one")
-    new_digi.segments(1)  
-    new_digi.averages(2**18)
-    new_digi.samples(2**12) 
-    # new_digi.sample_rate(100e6)
+# def runme():
+#     new_digi = M4iprocessorGPU("one")
+#     new_digi.segments(5)  
+#     new_digi.averages(2**10)
+#     new_digi.samples(512) 
+#     # new_digi.sample_rate(100e6)
 
-#     import uqtools as uq
+# #     import uqtools as uq
 
-#     tv = uq.ParameterMeasurement(new_digi.analog, data_save=True)
-#     tv_sample_av = uq.Integrate(tv, 'sample', average=True)
-#     tv_segment_av = uq.Integrate(tv, 'segment', average=True)
-#     tv_channel_av = uq.Integrate(tv, 'channel', average=True)
+# #     tv = uq.ParameterMeasurement(new_digi.analog, data_save=True)
+# #     tv_sample_av = uq.Integrate(tv, 'sample', average=True)
+# #     tv_segment_av = uq.Integrate(tv, 'segment', average=True)
+# #     tv_channel_av = uq.Integrate(tv, 'channel', average=True)
 
-#     print("Ithee bro")
-    # data = new_digi.get_data()
-    data = np.array(new_digi.singleshot_analog())
-    print(data.shape)
-    data = np.array(new_digi.time_integrated_singleshot_analog())
-    print(data.shape)
-    # data = np.array(new_digi.analog())
-    print(data.shape)
+# #     print("Ithee bro")
+#     # data = new_digi.get_data()
+#     import time
+#     starttime = time.time()
+#     data = new_digi.singleshot_analog()
+#     print(time.time()-starttime)
+#     print(data.shape)
+#     starttime = time.time()
+#     new_digi.processor.time_integrate.start=100
+#     new_digi.processor.time_integrate.stop=101
+#     data = new_digi.time_integrated_singleshot_analog()
+#     print(time.time()-starttime)
+#     print(data.shape)
+#     # data = np.array(new_digi.time_integrated_singleshot_analog())
+#     # print(data.shape)
+#     # data = np.array(new_digi.analog())
+#     # print(data.shape)
 
-if __name__ == '__main__':
-    runme()
+# if __name__ == '__main__':
+#     runme()
