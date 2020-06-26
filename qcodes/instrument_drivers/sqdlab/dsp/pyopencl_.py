@@ -806,3 +806,119 @@ class TimeIntegrate(object):
         assert stop > start, "Must integrate a natural number of points."
         kernel(cq, (out_shape[0], samples), None, out.data, in1.data, np.uint32(), np.uint32(stop%samples + 1))
         return out.get().reshape(np.delete(original_shape, -2))
+
+class MarkerExtractionForML(object):
+    ''' Copy of Short to Float class without converting to float.'''
+
+    code = """
+        #define itype short
+        #define btype char
+
+        __kernel void extract(
+            __global itype *output,
+            __global const itype *input,
+            const unsigned int blocklen,
+            const unsigned int bits
+        ) {
+            const size_t in_idx = get_global_id(1)*blocklen + get_global_id(0), 
+                         out_idx = get_global_id(1)*get_global_size(0) + get_global_id(0);
+            itype sample = (get_global_id(0) < blocklen) ? input[in_idx] : 0;
+            // sign extension
+            if(bits != 16) {
+                const itype sign_bit = 1 << (bits - 1);
+                sample = (sample & (sign_bit - 1)) - (sample & sign_bit);
+            }
+            output[out_idx] = (get_global_id(0) < blocklen) ? sample : 0.;
+        }
+
+        __kernel void extract_with_markers(
+            __global itype *output,
+            __global btype *marker1,
+            __global btype *marker2, 
+            __global const itype *input, 
+            const unsigned int blocklen,
+            const unsigned int bits
+        ) {
+            const size_t in_idx = get_global_id(1)*blocklen + get_global_id(0), 
+                         out_idx = get_global_id(1)*get_global_size(0) + get_global_id(0);
+            itype sample = (get_global_id(0) < blocklen) ? input[in_idx] : 0;
+            marker1[out_idx] = sample & 0x8000 ? 1 : 0;
+            marker2[out_idx] = sample & 0x4000 ? 1 : 0;
+            //sample = (sample << 2) >> 2; // sign extension (sadly optimized away by the compiler)
+            //sample = (sample & 0x3fff) | ((sample << 1) & (1<<14)) | ((sample << 2) & (1<<15)); // sign extension
+            // sign extension
+            const itype sign_bit = 1 << (bits - 1);
+            sample = (sample & (sign_bit - 1)) - (sample & sign_bit);
+            output[out_idx] = sample;
+        }
+    """
+
+    def __init__(self, context):
+        code = ''.join(Template(self.code).render())
+        self.prg = cl.Program(context, code).build()
+
+    def __call__(self, queue, in1, markers=False, bits=16, padding=0, out=None):
+        '''
+        Convert input samples to floating point numbers and separate the marker bits.
+        
+        Input
+        -----
+        queue
+            OpenCL command queue the operation is performed in. 
+        in1: `pyopencl.array.Array` or `np.ndarray`
+            Input samples. Must be a 2d numpy ndarray or pyopencl Array of 16bit 
+            integers.
+        markers: `bool`
+            If True, the two most significant bits are considered markers.
+        padding: `int`
+            Number of bytes of zero padding to add to each block of samples.
+        out: `pyopencl.array.Array`, optional
+            Output array if markers is False, tuple of output and marker arrays
+            if markers is True. Use pre-allocated arrays to speed up processing.
+            
+        Return
+        ------
+        out: pyopencl.array.Array, shape=(in1.shape[0], blocklen)
+            Sample values as float
+        marker1, marker2: cl.Array, dtype=uint8, same shape as out
+            uint8(1) for each set and uint8(0) for each unset marker bit
+        '''
+        btype = np.uint8
+        # check input and transfer to device
+        if (in1.dtype != np.int16) and (in1.dtype != np.uint16):
+            raise TypeError('in1 must be a vector of 16bit integers.')
+        if in1.ndim < 1:
+            raise ValueError('in1 must be a vector.')
+        if isinstance(in1, np.ndarray):
+            in1 = cl.array.to_device(queue, in1, async=True)
+        # check output(s)
+        out_shape = in1.shape[:-1] + (in1.shape[-1]+padding,)
+        if out is not None:
+            for arr in out if markers else (out,):
+                if arr.shape != out_shape:
+                    raise ValueError('shape of outputs must be {}'.format(out_shape))
+        global_size = (out_shape[-1], np.prod((1,)+out_shape[:-1]))
+        if markers:
+            # allocate result arrays
+            if out is None:
+                out = cl.array.Array(queue, out_shape, in1.dtype)
+                marker1 = cl.array.Array(queue, out.shape, btype)
+                marker2 = cl.array.Array(queue, out.shape, btype)
+            else:
+                out, marker1, marker2 = out
+            # run computation
+            function = getattr(self.prg, 'extract_with_markers')
+            function(
+                queue, global_size, None, 
+                out.data, marker1.data, marker2.data, in1.data, np.uint32(in1.shape[-1], np.uint32(bits))
+            )
+            return out, marker1, marker2
+        else:
+            # allocate result arrays
+            if out is None:
+                out = cl.array.Array(queue, out_shape, in1.dtype)
+            # run computation
+            function = getattr(self.prg, 'extract')
+            function(queue, global_size, None, out.data, in1.data, 
+                     np.uint32(in1.shape[-1]), np.uint32(bits))
+            return out

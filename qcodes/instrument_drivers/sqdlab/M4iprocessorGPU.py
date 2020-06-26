@@ -2,7 +2,8 @@ import scipy
 import logging
 import numpy as np
 from qcodes import validators as vals, ManualParameter, ArrayParameter
-from qcodes.instrument_drivers.sqdlab.ADCProcessorGPU import TvModeGPU
+from qcodes.instrument_drivers.sqdlab.ADCProcessorGPU import TvModeGPU, TvModeGPUML
+from qcodes.instrument_drivers.sqdlab.ADCProcessor import TvMode
 from qcodes.instrument_drivers.Spectrum.M4i import M4i
 import qcodes.instrument_drivers.Spectrum.pyspcm as spcm
 from qcodes.instrument.base import Instrument
@@ -262,11 +263,8 @@ class M4iprocessorGPU(Instrument):
             self.processor.filter.description.set('firwin with {} taps, {} cutoff'
                                         .format(taps, cutoff))
         else:
-            if not isinstance(self.processor, TvModeGPU):
+            if not isinstance(self.processor, TvMode):
                 raise Exception("Digitizer needs a processor")
-            else :
-                # TODO: create checks for (unpacker, sync) depending upon digitizer parameter (channels,(analog & digital))
-                pass
         
     def _set_segments(self, segments):
         if segments == 0:
@@ -357,7 +355,10 @@ class M4iprocessorGPU(Instrument):
         
 
 def runme():
-    new_digi = M4iprocessorGPU("one")
+    tvmode_ml = TvModeGPUML('tvmode_ml')
+
+
+    new_digi = M4iprocessorGPU("one", processor=tvmode_ml)
     new_digi.segments(5)  
     new_digi.averages(2**10)
     new_digi.samples(512) 
@@ -369,10 +370,10 @@ def runme():
     uq.config.store = 'MemoryStore'
     uq.config.store_kwargs = {}
 
-    tv_ss = uq.DigiTvModeMeasurement(new_digi, singleshot=True, data_save=True)
+    # tv_ss = uq.DigiTvModeMeasurement(new_digi, singleshot=True, data_save=True)
 
-    store = tv_ss()
-    print(store)
+    # store = tv_ss()
+    # print(store)
 
 #     tv = uq.ParameterMeasurement(new_digi.analog, data_save=True)
 #     tv_sample_av = uq.Integrate(tv, 'sample', average=True)
@@ -385,7 +386,11 @@ def runme():
     starttime = time.time()
     data = new_digi.singleshot_analog()
     print(time.time()-starttime)
-    print(data.shape)
+
+    X = data.reshape(np.prod(data.shape[:-2]), np.prod(data.shape[-2:]))
+    Y = [1,2,3,4,5]*np.prod(data.shape[:-3])
+
+    # print(data)
     # starttime = time.time()
     # new_digi.processor.time_integrate.start=100
     # new_digi.processor.time_integrate.stop=101
@@ -396,6 +401,7 @@ def runme():
     # print(data.shape)
     # data = np.array(new_digi.analog())
     # print(data.shape)
+    print("DONE!!!")
 
 if __name__ == '__main__':
     runme()
