@@ -305,7 +305,8 @@ class M4iprocessorGPU(Instrument):
     
     def _set_sample_rate(self, rate):
         self._digi.sample_rate.set(rate)
-        self.sample_rate.get()
+        new_rate = self.sample_rate.get()
+        logging.warning(f"Cannot set sampling rate to {rate}, it is set to {new_rate} instead")
 
     def get_data(self):
         '''
