@@ -401,8 +401,9 @@ class TimingConfig(Instrument):
         import ipywidgets as widgets
         interact(update_plots, channel=widgets.IntSlider(min=0, max=len(seq.sampled_sequences) - 1, step=1),
                        segment=widgets.IntSlider(min=0, max=len(seq.sampled_sequences[0].waveforms) - 1, step=1))
-        dummy = plt.figure()
-        new_manager = dummy.canvas.manager
-        new_manager.canvas.figure = fig
-        fig.set_canvas(new_manager.canvas)
-        plt.show()
+        # dummy = plt.figure()
+        # new_manager = dummy.canvas.manager
+        # new_manager.canvas.figure = fig
+        # fig.set_canvas(new_manager.canvas)
+        # plt.show()
+        return fig
