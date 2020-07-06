@@ -349,7 +349,7 @@ class TimingConfig(Instrument):
         fig = self.plot()
         ax = fig.axes[0]
         
-        awg_start = self.get_timings()['awg']['trig_start']
+        awg_start = self.get_timings()['awg']['out_start']
 
         scale = 1e6
 

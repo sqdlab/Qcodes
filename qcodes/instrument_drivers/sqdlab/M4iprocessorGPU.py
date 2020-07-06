@@ -317,9 +317,10 @@ class M4iprocessorGPU(Instrument):
         # TODO: segments can be arbitrary on the adc, but tvmode 
         # does not yet support variable-sized blocks
         num_of_acquisitions = self.averages.get()*max(1, self.segments.get())
-        assert num_of_acquisitions >= 16, "Number of acquisitions must be greater than or equal to 16."
+        # assert num_of_acquisitions >= 16, "Number of acquisitions must be greater than or equal to 16."
+        assert (num_of_acquisitions*self.samples.get()%4096 == 0) or (num_of_acquisitions*self.samples.get() in [2**4, 2**5, 2**6, 2**7, 2**8, 2**9, 2**10, 2**11]), "The number of total samples requested to the card is not valid.\nThis must be 16, 32, 64, 128, 256, 512, 1k ,2k or any multiple of 4k.\nThe easiest way to ensure this is to use powers of 2 for averages, samples and segments, probably in that order of priority."
         max_blocksize = min(2**28//self.samples.get(), self.samples.get()*num_of_acquisitions)
-        assert self.segments.get()*self.samples.get() < max_blocksize, "The number of segments does not fit in 1 block of GPU processing. Reduce number of segments or samples."
+        assert self.segments.get()*self.samples.get() <= max_blocksize, "The number of segments does not fit in 1 block of GPU processing. Reduce number of segments or samples."
         blocks = max(num_of_acquisitions//max_blocksize, 1)
         # WARNING DO NOT SET blocksize = 1; it needs AT to be LEAST 2!!!!!!
         blocksize = min(max_blocksize, num_of_acquisitions)
@@ -359,9 +360,10 @@ class M4iprocessorGPU(Instrument):
 
 def runme():
     new_digi = M4iprocessorGPU("one")
-    new_digi.segments(5)  
+    new_digi.segments(3)
     new_digi.averages(2**10)
-    new_digi.samples(512) 
+    new_digi.samples(2**5) 
+    new_digi.fir_coeffs(np.array([1]))
     # new_digi.sample_rate(100e6)
 
     import uqtools as uq
@@ -370,9 +372,12 @@ def runme():
     uq.config.store = 'MemoryStore'
     uq.config.store_kwargs = {}
 
+    tv = uq.DigiTvModeMeasurement(new_digi, singleshot=False, data_save=True)
     tv_ss = uq.DigiTvModeMeasurement(new_digi, singleshot=True, data_save=True)
 
-    store = tv_ss()
+    store = tv()
+    print(store)
+    store = tv()
     print(store)
 
 #     tv = uq.ParameterMeasurement(new_digi.analog, data_save=True)
@@ -382,11 +387,11 @@ def runme():
 
 #     print("Ithee bro")
     # data = new_digi.get_data()
-    import time
-    starttime = time.time()
-    data = new_digi.singleshot_analog()
-    print(time.time()-starttime)
-    print(data.shape)
+    # import time
+    # starttime = time.time()
+    # data = new_digi.singleshot_analog()
+    # print(time.time()-starttime)
+    # print(data.shape)
     # starttime = time.time()
     # new_digi.processor.time_integrate.start=100
     # new_digi.processor.time_integrate.stop=101
