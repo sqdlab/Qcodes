@@ -2,7 +2,7 @@ import numpy as np
 import time, re, logging, warnings
 
 from qcodes import VisaInstrument, validators as vals
-from qcodes.utils.validators import Ints, Bool
+from qcodes.utils.validators import Ints, Bool, Enum, Anything, MultiType
 from qcodes import ArrayParameter
 from qcodes.instrument.channel import InstrumentChannel, ChannelList
 
@@ -149,42 +149,28 @@ class RigolDS5072Channel(InstrumentChannel):
 
     def __init__(self, parent, name, channel):
         super().__init__(parent, name)
+        self.channel_number = channel
 
-        self.add_parameter("channel_state",
-                            get_cmd=':OUTP{}:STAT?'.format(channel),
+        self.add_parameter("output_state",
+                            label="Set the channel output to on or off",
                             set_cmd=self._set_channel_state,
-                            vals=vals.Enum('ON','OFF')
-                            )
+                            get_cmd=":OUTP{}:STAT?".format(self.channel_number),
+                            vals=Enum("ON","OFF"))
 
-    def _set_channel_state(self,,channel_number,state):
-        print(f":OUTP{self.channel}:STAT{state}")
-        # self.write(f":OUTP{self.channel}:STAT")
+        self.add_parameter("impedence",
+                            label="set channel impedence",
+                            set_cmd=self._set_channel_impedence,
+                            get_cmd=":OUTP{}:IMP?".format(self.channel_number),
+                            vals=Ints(min_value=1, max_value=10000))                           
 
-        # self.add_parameter("amplitude",
-        #                    get_cmd=":MEASure:VAMP? chan{}".format(channel),
-        #                    get_parser = float
-        #                   )
-        # self.add_parameter("vertical_scale",
-        #                    get_cmd=":CHANnel{}:SCALe?".format(channel),
-        #                    set_cmd=":CHANnel{}:SCALe {}".format(channel, "{}"),
-        #                    get_parser=float
-        #                   )
+    def _set_channel_state(self, state):
+        self.write(":OUTP{}:STAT {}".format(self.channel_number,state))
 
-        # # Return the waveform displayed on the screen
-        # self.add_parameter('curvedata',
-        #                    channel=channel,
-        #                    parameter_class=ScopeArray,
-        #                    raw=False
-        #                    )
+    def _set_channel_impedence(self, imp):
+        self.write(":OUTP{}:IMP {}".format(self.channel_number, imp))
 
-        # # Return the waveform in the internal memory
-        # self.add_parameter('curvedata_raw',
-        #                    channel=channel,
-        #                    parameter_class=ScopeArray,
-        #                    raw=True
-                        #    )
 
-class DS4000(VisaInstrument):
+class DS5072(VisaInstrument):
     """
     This is the QCoDeS driver for the Rigol DS4000 series oscilloscopes.
     """
@@ -274,3 +260,18 @@ class DS4000(VisaInstrument):
         if ver < LooseVersion('00.01.08'):
             warnings.warn('Firmware version should be at least 00.02.03,'
                           'data transfer may not work correctly')
+
+def runme():
+
+    a = DS5072("lol","TCPIP::192.168.3.102::INSTR")
+    chn = a.channels[0]
+    print(chn.output_state("ON"))
+    print(chn.output_state.get())
+    print(chn.impedence(50))
+    print(chn.impedence.get())
+    
+
+
+if __name__ == "__main__":
+    runme()
+    
