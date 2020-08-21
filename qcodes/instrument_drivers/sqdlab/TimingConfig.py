@@ -362,7 +362,7 @@ class TimingConfig(Instrument):
         # for waveform in seq.sampled_sequences[channel].waveforms:
         waveform = seq.sampled_sequences[0].waveforms[0]
         sampling_rate = seq.channels[0].sampling_freq
-        waveform_line, = ax.plot(np.arange(scale*awg_start, scale*len(waveform)/sampling_rate, scale/sampling_rate),  top + 2 + waveform)
+        waveform_line, = ax.plot(np.arange(scale*awg_start, scale*awg_start + scale*len(waveform)/sampling_rate, scale/sampling_rate),  top + 2 + waveform)
         yticks.append(top + 2)
         yticklabels.append('waveform')
 
@@ -371,7 +371,7 @@ class TimingConfig(Instrument):
         sampling_rate = seq.channels[0].sampling_freq / seq.channels[0].awg.granularity
         marker_lines = []
         for i, marker in enumerate(markers[::-1]):
-            marker_line, = ax.plot(np.arange(scale*awg_start, scale*len(marker)/sampling_rate, scale/sampling_rate), top + 0.5*i + 0.4*marker)
+            marker_line, = ax.plot(np.arange(scale*awg_start, scale*awg_start + scale*len(marker)/sampling_rate, scale/sampling_rate), top + 0.5*i + 0.4*marker)
             marker_lines.append(marker_line)
             yticks.append(top + 0.5*i)
             yticklabels.append('marker{:}'.format(i))
