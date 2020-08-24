@@ -36,3 +36,5 @@ dependencies:
     - ruamel.yaml
  - pyro4=4.80
  - pytables=3.5.2
+ - ipywidgets=7.5.1
+ - jupyter_contrib_nbextensions=0.5.1
