@@ -405,12 +405,11 @@ class SIM928_PLX_Proxy(Instrument):
             instrument's JSON snapshot.
     """
 
-    def __init__(self, name, remote_proxy, gpib_slots, slot_names=None, step = 0.0025, **kw):
+    def __init__(self, name, remote_proxy, sim_slots=[1], slot_names=None, step = 0.0025, **kw):
         
         # super().__init__(address=address, type='rs232')
         self._proxy = remote_proxy
         Instrument.__init__(self, name, **kw)
-        self.gpib_slots = gpib_slots
 
         
         if slot_names is None:
@@ -431,7 +430,8 @@ class SIM928_PLX_Proxy(Instrument):
         self.step = step
         
         
-        self.modules = self.find_modules()
+        # self.modules = self.find_modules()
+        self.modules = sim_slots
         for i in self.modules:
             self.write_module(i, 'TERM LF')
             module_name = self.slot_names.get(i, i)
