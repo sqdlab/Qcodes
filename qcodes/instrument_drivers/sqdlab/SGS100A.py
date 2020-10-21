@@ -94,7 +94,8 @@ class RohdeSchwarz_SGS100A(VisaInstrument):
                            get_parser=self.parse_str,
                            val_mapping={'on':'ON',
                                         'off':'OFF',
-                                        'auto':'AUTO'})
+                                        'auto':'AUTO'},
+                           snapshot_get=False)
 
         self.add_function('reset', call_cmd='*RST')
         self.add_function('run_self_tests', call_cmd='*TST?')
