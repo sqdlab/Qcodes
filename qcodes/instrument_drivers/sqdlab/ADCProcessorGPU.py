@@ -11,6 +11,12 @@ from .ADCProcessor import (
 )
 from . import dsp
 
+# from qcodes.instrument_drivers.sqdlab.ADCProcessor import (
+#     Unpacker, DigitalDownconversion, Filter, Mean, Synchronizer, TvMode, 
+#     Instrument, ManualParameter, vals
+# )
+# from qcodes.instrument_drivers.sqdlab import dsp
+
 def get_cl_context():
     '''get an opencl context for a gpu device'''
     for platform in cl.get_platforms():
@@ -106,6 +112,16 @@ class MeanGPU(Mean):
     def __call__(self, data, ndim, out=None):
         return self.mean(self.parent.gpu_queue, data, ndim=ndim, out=out).get()
 
+class TimeIntegrateGPU(Mean):
+    def __init__(self, *args, start=0, stop=-1, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.time_integrate = dsp.TimeIntegrate(self.parent.gpu_context)
+        self.start = start
+        self.stop = stop
+
+    def __call__(self, data, out=None):
+        return self.time_integrate(self.parent.gpu_queue, data, out=out, start=self.start, stop=self.stop)
+
 class SumGPU(Mean):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -127,6 +143,12 @@ class TvModeGPU(TvMode):
             cl_queue = get_cl_queue(cl_context)
         self.gpu_context = cl_context
         self.gpu_queue = cl_queue
+
+        self.add_parameter('singleshot', ManualParameter, 
+                           vals=vals.Bool(), initial_value=False)
+        
+        self.add_parameter('enable_time_integration', ManualParameter, 
+                           vals=vals.Bool(), initial_value=False)
         
         self.add_parameter('segments', ManualParameter, 
                            label='Number of segments. Zero for automatic.', 
@@ -140,9 +162,10 @@ class TvModeGPU(TvMode):
         self.add_submodule('sync', Synchronizer(self, 'sync'))
         #self.add_submodule('mean', MeanGPU(self, 'mean'))
         self.add_submodule('sum', SumGPU(self, 'sum'))
+        self.add_submodule('time_integrate', TimeIntegrateGPU(self, 'time_integrate'))
         self.connect_message()
 
-    def generate(self, source, mean=False):
+    def generate(self, source, mean=False, classify=False):
         '''Process blocks of samples provided by source.
 
         Each block is processed through the following processing pipeline:
@@ -181,12 +204,24 @@ class TvModeGPU(TvMode):
         analog_fir = None
         analog_fft = None
         analog_math = None
+        # analog_trunc = None
+        # analog_sum = None
+
+        class ADCProcessorGPUException(Exception):
+            # Releases GPUbuffers if any exception occurs.
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                for data in digital, analog_math, analog_fft, analog_fir, analog_ddc, analog:
+                    try:
+                        data.data.release()
+                    except cl._cl.LogicError:
+                        pass
 
         segments = self.segments()
 
         for block in source:
             # separate analog and digital data
-            #analog, digital = self.unpacker(block, out=(analog, digital))
+            # analog, digital = self.unpacker(block, out=(analog, digital))
             analog = self.unpacker.to_float(block, out=analog)
             # process samples through the queue
             analog_ddc = self.ddc(analog, out=analog_ddc)
@@ -203,32 +238,44 @@ class TvModeGPU(TvMode):
             else:
                 digital = self.unpacker.pack_markers(block, out=digital)
                 if digital is None:
-                    raise ValueError('Enable marker extraction in unpacker '
-                                     'to use auto segments.')
+                    raise ADCProcessorGPUException('Enable marker extraction in unpacker '
+                                    'to use auto segments.')
                 marked_segments = self.sync(digital)
                 if len(marked_segments) == 0:
-                    raise ValueError('No synchronization markers received.')
+                    raise ADCProcessorGPUException('No synchronization markers received.')
                 first_segment = marked_segments[0]
                 if (segments == 0) or (segments is None):
                     if len(marked_segments) < 2:
-                        raise ValueError('Need at least two synchronization '
-                                         'markers to determine the number of '
-                                         'segments.')
+                        raise ADCProcessorGPUException('Need at least two synchronization '
+                                        'markers to determine the number of '
+                                        'segments.')
                     segments = marked_segments[1] - marked_segments[0]
             if np.prod(analog.shape[:-2]) < segments:
-                raise ValueError('Each input block must contain at least '
-                                 '`segments` ({}) segments.'.format(segments))
+                raise ADCProcessorGPUException('Each input block must contain at least '
+                                '`segments` ({}) segments.'.format(segments))
             # truncate & reshape to (iteration, segment, sample, channel)
             repetitions = analog.shape[0] // segments
             analog_trunc = (analog_math[:repetitions*segments,...]
                             .reshape((repetitions, segments)+analog_math.shape[1:]))
-            analog_sum = self.sum(analog_trunc, analog_trunc.ndim-1)
-            if first_segment:
-                analog_sum = np.roll(analog_sum, -first_segment, axis=0)
-            if mean:
-                yield analog_sum / repetitions
+        
+            if self.singleshot():
+                if self.enable_time_integration():
+                    analog_time_integrate = self.time_integrate(analog_trunc)
+                else:
+                    analog_time_integrate = analog_trunc.get()
+                analog_trunc_np = analog_time_integrate
+                if first_segment:
+                    analog_trunc_np = np.roll(analog_trunc_np, -first_segment, axis=1)
+                yield analog_trunc_np
             else:
-                yield analog_sum, repetitions
+                analog_sum = self.sum(analog_trunc, analog_trunc.ndim-1)
+                if first_segment:
+                    analog_sum = np.roll(analog_sum, -first_segment, axis=0)
+                if mean:
+                    yield analog_sum / repetitions
+                else:
+                    yield analog_sum, repetitions
+
 
     def __call__(self, source):
         '''Processes all blocks generated by source through `generate`.
@@ -239,16 +286,37 @@ class TvModeGPU(TvMode):
         Returns:
             analog_mean: `np.ndarray`
         '''
-        repetitions_total = 0
-        analog_total = None
-        for analog_sum, repetitions in self.generate(source):
-            repetitions_total += repetitions
-            if analog_total is None:
-                analog_total = analog_sum
+        if self.singleshot():
+            if self.enable_time_integration():
+                # Making a full size array with zeros and inserting data into it as it comes in.
+                final_array = np.zeros(self._singleshot_shape[:2]+self._singleshot_shape[-1:], dtype=np.complex128)
+                iterations_per_block = self._blocksize//self._singleshot_shape[1]
+                for i, analog_trunc in enumerate(self.generate(source)):
+                    final_array[i*iterations_per_block:(i+1)*iterations_per_block] += analog_trunc
+                return final_array
             else:
-                analog_total += analog_sum
-        return analog_total / repetitions_total
+                # Making a full size array with zeros and inserting data into it as it comes in.
+                final_array = np.zeros(self._singleshot_shape, dtype=np.complex128)
+                iterations_per_block = self._blocksize//self._singleshot_shape[1]
+                for i, analog_trunc in enumerate(self.generate(source)):
+                    final_array[i*iterations_per_block:(i+1)*iterations_per_block] += analog_trunc
+                return final_array
+        else:
+            repetitions_total = 0
+            analog_total = None
+            for analog_sum, repetitions in self.generate(source):
+                repetitions_total += repetitions
+                if analog_total is None:
+                    analog_total = analog_sum
+                else:
+                    analog_total += analog_sum
+            return analog_total / repetitions_total
 
     def math(self, array, out):
         '''Override this function to do some maths'''
         return array
+
+# if __name__ == "__main__":
+#     import os
+#     print(os.getcwd())
+#     tvmode = TvModeGPU('tvmode')

@@ -339,3 +339,71 @@ class TimingConfig(Instrument):
                   loc='upper right', bbox_to_anchor=(1.02, -0.075))
 
         return fig
+
+    def awg_plot(self, seq, interactive=True):
+        if not seq.sampled_sequences:
+            seq.sample() 
+
+        import numpy as np
+
+        fig = self.plot()
+        ax = fig.axes[0]
+        
+        awg_start = self.get_timings()['awg']['out_start']
+
+        scale = 1e6
+
+        bottom, top = ax.get_ylim()
+        ax.set_ylim(bottom, top + 3.2)
+
+        yticklabels = list(ax.get_yticklabels())
+        yticks = list(ax.get_yticks())
+
+        # for waveform in seq.sampled_sequences[channel].waveforms:
+        waveform = seq.sampled_sequences[0].waveforms[0]
+        sampling_rate = seq.channels[0].sampling_freq
+        waveform_line, = ax.plot(np.arange(scale*awg_start, scale*awg_start + scale*len(waveform)/sampling_rate, scale/sampling_rate),  top + 2 + waveform)
+        yticks.append(top + 2)
+        yticklabels.append('waveform')
+
+        # for markers in seq.sampled_sequences[channel].markers:
+        markers = seq.sampled_sequences[0].markers[0]
+        sampling_rate = seq.channels[0].sampling_freq / seq.channels[0].awg.granularity
+        marker_lines = []
+        for i, marker in enumerate(markers[::-1]):
+            marker_line, = ax.plot(np.arange(scale*awg_start, scale*awg_start + scale*len(marker)/sampling_rate, scale/sampling_rate), top + 0.5*i + 0.4*marker)
+            marker_lines.append(marker_line)
+            yticks.append(top + 0.5*i)
+            yticklabels.append('marker{:}'.format(i))
+
+        ax.set_yticks(yticks)
+        ax.set_yticklabels(yticklabels, size=12)
+
+        def update_plots(channel, segment):
+            try:
+                waveform = seq.sampled_sequences[channel].waveforms[segment]
+                markers = seq.sampled_sequences[channel].markers[segment]
+            except IndexError:
+                waveform = 0*seq.sampled_sequences[0].waveforms[0]
+                markers = [0*seq.sampled_sequences[0].markers[0][0], 0*seq.sampled_sequences[0].markers[0][0]]
+
+            waveform_line.set_ydata(top + 2 + waveform)
+
+            for i, marker in enumerate(markers[::-1]):
+                marker_lines[i].set_ydata(top + 0.5*i + 0.4*marker)
+
+            fig.canvas.draw_idle()
+
+        if not interactive:
+            return fig, update_plots
+        import matplotlib.pyplot as plt
+        from ipywidgets import interact
+        import ipywidgets as widgets
+        interact(update_plots, channel=widgets.IntSlider(min=0, max=len(seq.sampled_sequences) - 1, step=1),
+                       segment=widgets.IntSlider(min=0, max=len(seq.sampled_sequences[0].waveforms) - 1, step=1))
+        # dummy = plt.figure()
+        # new_manager = dummy.canvas.manager
+        # new_manager.canvas.figure = fig
+        # fig.set_canvas(new_manager.canvas)
+        # plt.show()
+        return fig

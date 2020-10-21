@@ -133,7 +133,7 @@ class Channel(InstrumentChannel):
                                         'mixer' : 'mixer'})
 
         self.add_parameter('sampling_rate', unit='Hz',
-                           # getcmd=self._get_sampling_rate,
+                           get_cmd=lambda: self._sampling_rate,
                            set_cmd=self._set_sampling_rate,
                            get_parser=float,
                            vals=vals.Numbers())
@@ -213,12 +213,10 @@ class Channel(InstrumentChannel):
             else:
                 return
 
-
-
     def _set_sampling_rate(self, rate):
-        for _, parameter in self._parent.parameters.items():
-            if isinstance(parameter, (Channel)) and parameter._awg_model==self._awg_model:
-                parameter._sampling_rate = rate
+        for _, submodule in self._parent.submodules.items():
+            if isinstance(submodule, (Channel)) and submodule.awg_model==self.awg_model:
+                submodule._sampling_rate = rate
 
     def get_config(self):
         config = {}
@@ -233,7 +231,7 @@ class Channel(InstrumentChannel):
                     p(getattr(self, k)())
 
         for k, p in self.parameters.items():
-            if k not in ['delay', 'delay_m1', 'delay_m0', 'fir_cutoff', 'fir_window']:
+            if k not in ['delay', 'delay_m1', 'delay_m0', 'fir_cutoff', 'fir_window', 'sampling_rate']:
                 config[k] = p()
             elif k == 'delay':
                 config[k] = self.delay()
@@ -241,6 +239,8 @@ class Channel(InstrumentChannel):
                 config['marker_delays'] = (self.delay_m0(), self.delay_m1())
             elif k=='fir_window':
                 config['fir_parameters'] = (self.fir_window(), self.fir_cutoff())
+            elif k=='sampling_rate':
+                config['sampling_rate'] = self._sampling_rate
 
         return config
 
@@ -353,10 +353,10 @@ class PulseConfig(Instrument):
                 self.add_submodule(chpair_name, chpair)
                 chpair.add_channel(channel)
             awg_chs.append(channel)
+            channel.sampling_rate(sampling_rate)
             self.nchannels += 1
 
         self._awg_channels.append(awg_chs)
-        channel.sampling_rate(sampling_rate)
 
     def get_awgs(self):
         ''' return list of awgs '''

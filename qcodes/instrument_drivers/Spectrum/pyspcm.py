@@ -2,6 +2,7 @@ import os
 import platform
 import sys
 from ctypes import *
+import logging
 
 # load registers for easier access
 from py_header.regs import *
@@ -47,7 +48,7 @@ uptr64 = POINTER (uint64)
 
 # Windows
 if os.name == 'nt':
-    sys.stdout.write("Windows found")
+    logging.info("Windows found")
 
     # define card handle type
     if (bIs64Bit):
@@ -153,7 +154,7 @@ if os.name == 'nt':
 
 
 elif os.name == 'posix':
-    sys.stdout.write("Linux found")
+    logging.info("Linux found")
 
     # define card handle type
     drv_handle = c_void_p

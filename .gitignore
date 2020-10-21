@@ -103,3 +103,5 @@ benchmarking/results/
 
 # Ignore .db files that are generated for some tests
 qcodes/tests/dataset/fixtures/db_files/*
+try_gpu_fake - Copy.py
+fake_source.npy
